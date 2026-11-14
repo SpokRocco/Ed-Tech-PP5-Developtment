@@ -1,0 +1,84 @@
+@import '@fontsource/prompt/400.css';
+@import '@fontsource/prompt/500.css';
+@import '@fontsource/prompt/600.css';
+@import '@fontsource/prompt/700.css';
+@import '@fontsource/kanit/500.css';
+@import '@fontsource/kanit/600.css';
+@import '@fontsource/kanit/700.css';
+@import '@fontsource/sarabun/400.css';
+@import '@fontsource/sarabun/600.css';
+@import '@fontsource/sarabun/700.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Prompt', 'Kanit', system-ui, -apple-system, sans-serif;
+    background-color: #FAF8F3;
+    color: #1E293B;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Kanit', 'Prompt', system-ui, sans-serif;
+  }
+
+  .font-official {
+    font-family: 'Sarabun', 'TH SarabunPSK', sans-serif;
+  }
+}
+
+/* Custom Scrollbar for Wide Attendance / Score Tables */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F3EFE4;
+}
+::-webkit-scrollbar-thumb {
+  background: #94A3B8;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #0F2557;
+}
+
+/* Official A4 Print Styles */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-page-break {
+    page-break-after: always;
+    break-after: page;
+  }
+  .print-avoid-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
+@page landscape-page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+.a4-landscape-section {
+  page: landscape-page;
+}
