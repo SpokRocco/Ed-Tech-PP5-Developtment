@@ -207,4 +207,21 @@ export const SCHEMA_STATEMENTS = [
     UNIQUE (student_id, academic_year, semester)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_primary2568_grade_room ON primary2568_assessments (grade_level, classroom, academic_year, semester)`,
+  `CREATE TABLE IF NOT EXISTS academic_documents (
+    id TEXT PRIMARY KEY,
+    doc_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    grade_level TEXT NOT NULL DEFAULT '',
+    classroom TEXT NOT NULL DEFAULT '1',
+    academic_year TEXT NOT NULL DEFAULT '2569',
+    semester TEXT NOT NULL DEFAULT '1',
+    student_id TEXT,
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('draft', 'in_progress', 'completed', 'submitted', 'approved')),
+    completion_pct INTEGER NOT NULL DEFAULT 0 CHECK (completion_pct >= 0 AND completion_pct <= 100),
+    payload TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_academic_docs_owner ON academic_documents (owner_id, doc_type, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_academic_docs_scope ON academic_documents (doc_type, grade_level, classroom, academic_year, semester)`,
 ];

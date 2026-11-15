@@ -169,7 +169,7 @@ export function Primary2568Page() {
     const saved = await dataService.savePrimary2568Batch(payload);
     setAssessments(saved);
     setSavingMsg(
-      `บันทึกผลประเมินตามความสามารถ 8 ด้าน ปพ.5 (หลักสูตร 2568) ชั้น ${gradeLevel}/${classroom} เรียบร้อย`
+      `บันทึกผลประเมินตามความสามารถ 8 ด้าน ปพ.5 ป.1-3 (2569) ชั้น ${gradeLevel}/${classroom} เรียบร้อย`
     );
   };
 
@@ -182,7 +182,7 @@ export function Primary2568Page() {
         const nodes = Array.from(
           printAreaRef.current?.querySelectorAll('[data-pdf-page="true"]') || []
         );
-        const label = targetView === 'pp6' ? 'ปพ6_รายบุคคล' : 'ปพ5_2568_สรุปชั้น';
+        const label = targetView === 'pp6' ? 'ปพ6_รายบุคคล' : 'ปพ5_2569_สรุปชั้น';
         await exportA4PagesToPdf(nodes, `${label}_${gradeLevel}-${classroom}.pdf`);
       } finally {
         setExporting('');
@@ -202,7 +202,7 @@ export function Primary2568Page() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold px-3 py-1 rounded-full bg-emerald-500/25 text-emerald-200 border border-emerald-400/40">
-              🌱 ปพ.5 ป.1-3 (หลักสูตร 2568 — โรงเรียนที่สมัครใจ)
+              🌱 ปพ.5 ป.1-3 (2569) — หลักสูตรประถมศึกษาตอนต้น (โรงเรียนที่สมัครใจ)
             </span>
             <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-400/20 text-gold-200 border border-gold-400/40">
               ไม่มีคะแนนสอบ / ไม่มีเกรด 0–4
@@ -229,7 +229,7 @@ export function Primary2568Page() {
             onClick={handleSaveAll}
             className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-gold-500 hover:bg-gold-600 text-navy-950 text-xs sm:text-sm font-bold shadow-sm"
           >
-            <Save className="w-4 h-4" /> บันทึกผล ปพ.5 (2568)
+            <Save className="w-4 h-4" /> บันทึกผล ปพ.5 (2569)
           </button>
         </div>
       </div>
@@ -580,7 +580,7 @@ export function Primary2568Page() {
                             แบบรายงานผลการพัฒนาผู้เรียนรายบุคคล (ปพ.6)
                           </h3>
                           <p className="text-xs text-slate-700">
-                            ตามหลักสูตรการศึกษาประถมศึกษาตอนต้น พุทธศักราช 2568 (ไม่มีการตัดสินด้วยคะแนนหรือเกรด)
+                            ตามหลักสูตรการศึกษาประถมศึกษาตอนต้น ปพ.5 ป.1-3 (2569) (ไม่มีการตัดสินด้วยคะแนนหรือเกรด)
                           </p>
                           <p className="text-sm font-bold mt-1">
                             {settings?.school_name} ({settings?.affiliation_short})
@@ -695,7 +695,7 @@ export function Primary2568Page() {
                       <SchoolLogo logoUrl={settings?.logo_url} className="w-12 h-12" />
                       <div>
                         <h3 className="text-lg font-bold text-navy-900">
-                          ปพ.5 ป.1-3 (2568) — แบบสรุปผลการประเมินตามความสามารถประจำชั้น {gradeLevel}/{classroom}
+                          ปพ.5 ป.1-3 (2569) — แบบสรุปผลการประเมินตามความสามารถประจำชั้น {gradeLevel}/{classroom}
                         </h3>
                         <p className="text-xs text-slate-600">
                           {settings?.school_name} ({settings?.affiliation_short}) • ปีการศึกษา {settings?.academic_year} • ไม่มีการให้คะแนนสอบและไม่มีเกรด 0–4

@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { BarChart3, BookOpenCheck, Settings2, BookCopy, Sprout } from 'lucide-react';
+import { BarChart3, BookOpenCheck, Settings2, BookCopy, Sprout, FolderOpen } from 'lucide-react';
 import { AppHeader } from './AppHeader';
 import { AppFooter } from './AppFooter';
 import { useAuth } from '../../hooks/useAuth';
@@ -34,8 +34,13 @@ export function MainLayout({ children }) {
       },
       {
         to: '/primary-2568',
-        label: '🌱 ปพ.5 ป.1-3 (2568) & ปพ.6',
+        label: '🌱 ปพ.5 ป.1-3 (2569) & ปพ.6',
         icon: Sprout,
+      },
+      {
+        to: '/documents',
+        label: '🗂 ศูนย์เอกสาร ปพ.4-8 & อบ.',
+        icon: FolderOpen,
       }
     );
   }

@@ -5,7 +5,7 @@ These rules apply across every session in this repository:
 1. **Standalone Turso SQL + Vercel Serverless Architecture (Completely Separated from `hadket`)**:
    - This system uses a dedicated **Turso (libSQL / SQLite)** SQL database paired with **Vercel Serverless Functions (`api/`)** and cookie-backed Auth/Session, completely isolated from the Ban Hat Khet school website (`hadket`).
    - Do **not** connect this application to Supabase or Firebase, and never modify any `hadket` database resources.
-   - Keep `api/` file count strictly at or below Vercel Hobby's **12 Serverless Functions** limit (currently 9 files in `api/`). Shared server helpers MUST live under `server/`, never inside `api/`.
+   - Keep `api/` file count strictly at or below Vercel Hobby's **12 Serverless Functions** limit (currently 10 files in `api/`). Shared server helpers MUST live under `server/`, never inside `api/`.
    - Images (`logo_url`, `emblem_url`, `director_signature_url`) are compressed client-side into Data URLs via `src/lib/mediaUtils.js` and stored directly inside the SQL `system_settings` table so no paid blob/object storage is needed.
 
 2. **Strict Account Isolation, Server RBAC & PII Separation**:

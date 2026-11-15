@@ -1,4 +1,5 @@
 import {
+  DEMO_ACADEMIC_DOCUMENTS,
   DEMO_ATTENDANCE,
   DEMO_CHARACTERISTICS_SCORES,
   DEMO_CLASSROOM_SUMMARIES,
@@ -75,6 +76,12 @@ function sortIndicators(list) {
   });
 }
 
+function sortAcademicDocuments(list) {
+  return [...(list || [])].sort((a, b) =>
+    String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
+  );
+}
+
 function defaultScoreStructure(courseId) {
   return {
     course_id: courseId,
@@ -91,6 +98,18 @@ function defaultScoreStructure(courseId) {
   };
 }
 
+function toFlatArray(val) {
+  if (Array.isArray(val)) return val;
+  if (val && typeof val === 'object') return Object.values(val).flat().filter(Boolean);
+  return [];
+}
+
+function toObjectValuesArray(val) {
+  if (Array.isArray(val)) return val;
+  if (val && typeof val === 'object') return Object.values(val).filter(Boolean);
+  return [];
+}
+
 function initialDemoDb() {
   return {
     settings: clone(DEMO_SYSTEM_SETTINGS),
@@ -99,12 +118,13 @@ function initialDemoDb() {
     subjects: clone(DEMO_SUBJECTS),
     indicators: clone(DEMO_INDICATORS),
     courses: clone(DEMO_COURSES),
-    scoreStructures: clone(DEMO_SCORE_STRUCTURES),
-    attendance: clone(DEMO_ATTENDANCE),
-    studentScores: clone(DEMO_STUDENT_SCORES),
-    characteristicsScores: clone(DEMO_CHARACTERISTICS_SCORES),
+    scoreStructures: toObjectValuesArray(clone(DEMO_SCORE_STRUCTURES)),
+    attendance: toFlatArray(clone(DEMO_ATTENDANCE)),
+    studentScores: toFlatArray(clone(DEMO_STUDENT_SCORES)),
+    characteristicsScores: toFlatArray(clone(DEMO_CHARACTERISTICS_SCORES)),
     classroomSummaries: clone(DEMO_CLASSROOM_SUMMARIES),
     primary2568Assessments: clone(DEMO_PRIMARY_2568_ASSESSMENTS),
+    academicDocuments: clone(DEMO_ACADEMIC_DOCUMENTS),
   };
 }
 
@@ -121,6 +141,13 @@ function loadDemoDb() {
         return {
           ...initialDemoDb(),
           ...parsed,
+          scoreStructures: toObjectValuesArray(parsed.scoreStructures ?? DEMO_SCORE_STRUCTURES),
+          attendance: toFlatArray(parsed.attendance ?? DEMO_ATTENDANCE),
+          studentScores: toFlatArray(parsed.studentScores ?? DEMO_STUDENT_SCORES),
+          characteristicsScores: toFlatArray(parsed.characteristicsScores ?? DEMO_CHARACTERISTICS_SCORES),
+          academicDocuments: Array.isArray(parsed.academicDocuments)
+            ? parsed.academicDocuments
+            : clone(DEMO_ACADEMIC_DOCUMENTS),
         };
       }
     }
@@ -208,6 +235,7 @@ export const dataService = {
         indicators: sortIndicators(dbData.indicators),
         courses: dbData.courses,
         classroomSummaries: dbData.classroomSummaries,
+        academicDocuments: sortAcademicDocuments(dbData.academicDocuments),
         __meta: {
           configured: false,
           schemaReady: false,
@@ -477,7 +505,7 @@ export const dataService = {
 
   async fetchAllSchoolAttendance() {
     if (!isBackendReadyForLive()) {
-      return loadDemoDb().attendance || [];
+      return toFlatArray(loadDemoDb().attendance);
     }
     const res = await apiRequest('/api/courses?scope=all_attendance');
     return res.rows || [];
@@ -485,7 +513,7 @@ export const dataService = {
 
   async fetchAllSchoolScores() {
     if (!isBackendReadyForLive()) {
-      return loadDemoDb().studentScores || [];
+      return toFlatArray(loadDemoDb().studentScores);
     }
     const res = await apiRequest('/api/courses?scope=all_scores');
     return res.rows || [];
@@ -493,7 +521,7 @@ export const dataService = {
 
   async fetchAllSchoolCharacteristics() {
     if (!isBackendReadyForLive()) {
-      return loadDemoDb().characteristicsScores || [];
+      return toFlatArray(loadDemoDb().characteristicsScores);
     }
     const res = await apiRequest('/api/courses?scope=all_characteristics');
     return res.rows || [];
@@ -501,10 +529,20 @@ export const dataService = {
 
   async fetchAllSchoolScoreStructures() {
     if (!isBackendReadyForLive()) {
-      return loadDemoDb().scoreStructures || [];
+      return toObjectValuesArray(loadDemoDb().scoreStructures);
     }
     const res = await apiRequest('/api/courses?scope=all_structures');
     return res.rows || [];
+  },
+
+  async fetchClassroomMatrixData() {
+    const [allScores, allAttendance, allCharacteristics, scoreStructures] = await Promise.all([
+      this.fetchAllSchoolScores(),
+      this.fetchAllSchoolAttendance(),
+      this.fetchAllSchoolCharacteristics(),
+      this.fetchAllSchoolScoreStructures(),
+    ]);
+    return { allScores, allAttendance, allCharacteristics, scoreStructures };
   },
 
   async saveScoreStructure(courseId, structure) {
@@ -728,5 +766,66 @@ export const dataService = {
       body: { action: 'save_summary', summary: summaryObj },
     });
     return res.summary;
+  },
+
+  async fetchAcademicDocuments(filters = {}) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      let list = dbData.academicDocuments || [];
+      if (filters.id) list = list.filter((d) => d.id === filters.id);
+      if (filters.docType) list = list.filter((d) => d.doc_type === filters.docType);
+      if (filters.gradeLevel) list = list.filter((d) => d.grade_level === filters.gradeLevel);
+      if (filters.classroom) list = list.filter((d) => String(d.classroom || '1') === String(filters.classroom));
+      return sortAcademicDocuments(list);
+    }
+    const params = new URLSearchParams();
+    if (filters.id) params.set('id', filters.id);
+    if (filters.docType) params.set('docType', filters.docType);
+    if (filters.gradeLevel) params.set('gradeLevel', filters.gradeLevel);
+    if (filters.classroom) params.set('classroom', String(filters.classroom));
+    const qs = params.toString();
+    const res = await apiRequest(`/api/documents${qs ? `?${qs}` : ''}`);
+    return sortAcademicDocuments(res.documents || []);
+  },
+
+  async saveAcademicDocument(docObj) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      if (!Array.isArray(dbData.academicDocuments)) {
+        dbData.academicDocuments = clone(DEMO_ACADEMIC_DOCUMENTS);
+      }
+      const id = docObj.id || `${docObj.doc_type}-${makeUuid()}`;
+      const idx = dbData.academicDocuments.findIndex((d) => d.id === id);
+      const saved = {
+        ...docObj,
+        id,
+        completion_pct: Math.max(0, Math.min(100, Number(docObj.completion_pct ?? 0))),
+        status: docObj.status || 'draft',
+        payload: docObj.payload && typeof docObj.payload === 'object' ? docObj.payload : {},
+        updated_at: new Date().toISOString(),
+      };
+      if (idx >= 0) dbData.academicDocuments[idx] = saved;
+      else dbData.academicDocuments.push(saved);
+      saveDemoDb(dbData);
+      return saved;
+    }
+    const res = await apiRequest('/api/documents', {
+      method: 'POST',
+      body: { document: docObj },
+    });
+    return res.document;
+  },
+
+  async deleteAcademicDocument(docId) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      dbData.academicDocuments = (dbData.academicDocuments || []).filter((d) => d.id !== docId);
+      saveDemoDb(dbData);
+      return true;
+    }
+    await apiRequest(`/api/documents?id=${encodeURIComponent(docId)}`, {
+      method: 'DELETE',
+    });
+    return true;
   },
 };

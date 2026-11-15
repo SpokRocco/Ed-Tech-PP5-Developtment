@@ -307,3 +307,26 @@ export function mapPrimary2568Row(row) {
     updated_at: row.updated_at || '',
   };
 }
+
+export function mapAcademicDocumentRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    doc_type: row.doc_type,
+    title: row.title,
+    grade_level: row.grade_level || '',
+    classroom: String(row.classroom || '1'),
+    academic_year: row.academic_year || '2569',
+    semester: String(row.semester || '1'),
+    student_id: row.student_id || null,
+    owner_id: row.owner_id,
+    status: row.status || 'in_progress',
+    completion_pct: Number(row.completion_pct ?? 0),
+    payload: parseJsonSafe(row.payload, {}),
+    updated_at: row.updated_at || '',
+  };
+}
+
+export function sortAcademicDocuments(list) {
+  return sortCourses(list);
+}

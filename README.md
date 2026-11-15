@@ -59,7 +59,7 @@ git push -u origin main
 ---
 
 ## 4. การ Deploy บน Vercel
-โปรเจกต์มีโฟลเดอร์ `api/` (9 Serverless Functions — อยู่ภายใต้ลิมิต 12 ฟังก์ชันของ Vercel Hobby Plan) และ `vercel.json` (`"/((?!api/).*)" -> "/index.html"`) เรียบร้อยแล้ว
+โปรเจกต์มีโฟลเดอร์ `api/` (10 Serverless Functions — อยู่ภายใต้ลิมิต 12 ฟังก์ชันของ Vercel Hobby Plan) และ `vercel.json` (`"/((?!api/).*)" -> "/index.html"`) เรียบร้อยแล้ว
 1. Import Repository จาก GitHub เข้าสู่ [Vercel](https://vercel.com)
 2. เพิ่ม **Environment Variables** ใน Vercel Project Settings (เลือก Production / Preview / Development):
    - `TURSO_DATABASE_URL`

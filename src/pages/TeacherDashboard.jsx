@@ -17,6 +17,7 @@ import { dataService } from '../services/dataService';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Modal } from '../components/common/Modal';
 import { DocumentTypesCatalog } from '../components/common/DocumentTypesCatalog';
+import { MyDocumentsSection } from '../components/documents/MyDocumentsSection';
 import { GRADE_LEVELS, computeCourseCompletion, getFullStudentName } from '../lib/thaiFormatting';
 
 export function TeacherDashboard() {
@@ -65,7 +66,10 @@ export function TeacherDashboard() {
   }, [myAllCourses, semesterFilter]);
 
   const courseCompletions = useMemo(() => {
-    const structMap = new Map((scoreStructures || []).map((st) => [st.course_id, st]));
+    const structureList = Array.isArray(scoreStructures)
+      ? scoreStructures
+      : Object.values(scoreStructures || {});
+    const structMap = new Map(structureList.map((st) => [st.course_id, st]));
     const out = {};
     myAllCourses.forEach((c) => {
       out[c.id] = computeCourseCompletion(c, {
@@ -183,6 +187,17 @@ export function TeacherDashboard() {
 
       {/* Document Types Hub */}
       <DocumentTypesCatalog onCreateSubjectClick={() => setCreateOpen(true)} />
+
+      {/* Searchable My Documents List (ปพ.4-8 & อบ.1-3) */}
+      <MyDocumentsSection
+        myCourses={myAllCourses}
+        courseCompletions={courseCompletions}
+        allScores={allScores}
+        allAttendance={allAttendance}
+        allCharacteristics={allCharacteristics}
+        scoreStructures={scoreStructures}
+        onDeleteCourse={deleteCourse}
+      />
 
       {/* Semester Overview Switcher */}
       <div className="bg-white rounded-2xl border border-ivory-300 shadow-sm p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">

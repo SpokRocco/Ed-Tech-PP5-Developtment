@@ -41,7 +41,7 @@ import { buildCoverSummaryStats, mergeReportLayout } from './reportLayoutAdapter
  * ============================================================================
  */
 
-function downloadBlob(blob, filename) {
+export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -207,7 +207,7 @@ const thinBorder = {
   right: { style: BorderStyle.SINGLE, size: 4, color: '475569' },
 };
 
-function makeDocxCell(text, { bold = false, align = AlignmentType.CENTER, shading = undefined, size = 24, widthPct = undefined } = {}) {
+export function makeDocxCell(text, { bold = false, align = AlignmentType.CENTER, shading = undefined, size = 24, widthPct = undefined } = {}) {
   return new TableCell({
     borders: thinBorder,
     shading: shading ? { fill: shading } : undefined,
@@ -229,7 +229,7 @@ function makeDocxCell(text, { bold = false, align = AlignmentType.CENTER, shadin
   });
 }
 
-function makeDocxParagraph(text, { bold = false, size = 28, align = AlignmentType.LEFT, spaceAfter = 100 } = {}) {
+export function makeDocxParagraph(text, { bold = false, size = 28, align = AlignmentType.LEFT, spaceAfter = 100 } = {}) {
   return new Paragraph({
     alignment: align,
     spacing: { after: spaceAfter },
@@ -925,8 +925,8 @@ export function exportPrimary2568ToExcel({
   });
 
   const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ หมายเหตุ: 'ไม่มีข้อมูลนักเรียน' }]);
-  XLSX.utils.book_append_sheet(wb, ws, `ปพ5_2568_${gradeLevel}`);
-  XLSX.writeFile(wb, `ปพ5_2568_${gradeLevel}-${classroom}_ปี${settings.academic_year}.xlsx`);
+  XLSX.utils.book_append_sheet(wb, ws, `ปพ5_2569_${gradeLevel}`);
+  XLSX.writeFile(wb, `ปพ5_2569_${gradeLevel}-${classroom}_ปี${settings.academic_year}.xlsx`);
 }
 
 export async function exportPrimary2568ToDocx({
@@ -979,7 +979,7 @@ export async function exportPrimary2568ToDocx({
       },
       children: [
         makeDocxParagraph(
-          `ปพ.5 ป.1-3 (หลักสูตรประถมศึกษาตอนต้น พ.ศ. 2568) — ชั้น ${gradeLevel}/${classroom}`,
+          `ปพ.5 ป.1-3 (2569) — แบบสรุปผลการประเมินตามความสามารถ ชั้น ${gradeLevel}/${classroom}`,
           { bold: true, size: 30, align: AlignmentType.CENTER, spaceAfter: 60 }
         ),
         makeDocxParagraph(
@@ -1009,7 +1009,7 @@ export async function exportPrimary2568ToDocx({
           },
         },
         children: [
-          makeDocxParagraph('ปพ.6 — แบบรายงานผลการพัฒนาผู้เรียนรายบุคคล (หลักสูตร ป.1-3 พ.ศ. 2568)', {
+          makeDocxParagraph('ปพ.6 — แบบรายงานผลการพัฒนาผู้เรียนรายบุคคล (ปพ.5 ป.1-3 2569)', {
             bold: true,
             size: 32,
             align: AlignmentType.CENTER,
@@ -1078,6 +1078,6 @@ export async function exportPrimary2568ToDocx({
     blob,
     mode === 'pp6'
       ? `ปพ6_รายบุคคล_${gradeLevel}-${classroom}_GoogleDocs.docx`
-      : `ปพ5_2568_${gradeLevel}-${classroom}_GoogleDocs.docx`
+      : `ปพ5_2569_${gradeLevel}-${classroom}_GoogleDocs.docx`
   );
 }

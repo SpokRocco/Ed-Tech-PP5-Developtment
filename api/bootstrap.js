@@ -2,6 +2,7 @@ import { ensureSchema, getDb, isTursoConfigured } from '../server/db.js';
 import { getSessionUser, jsonError, jsonOk, parseJsonBody, requireSession } from '../server/auth.js';
 import { seedDatabaseWithClient } from '../server/seedService.js';
 import {
+  mapAcademicDocumentRow,
   mapClassroomSummaryRow,
   mapCourseRow,
   mapIndicatorRow,
@@ -10,6 +11,7 @@ import {
   mapSubjectRow,
   mapSystemSettingsRow,
   mapUserRow,
+  sortAcademicDocuments,
   sortCourses,
   sortIndicators,
   sortStudents,
@@ -28,6 +30,7 @@ export async function GET(request) {
       indicators: DEMO_INDICATORS,
       courses: [],
       classroomSummaries: [],
+      academicDocuments: [],
       __meta: { configured: false, schemaReady: false, isSeeded: false, reason: 'unconfigured' },
     });
   }
@@ -54,6 +57,7 @@ export async function GET(request) {
         indicators: DEMO_INDICATORS,
         courses: [],
         classroomSummaries: [],
+        academicDocuments: [],
         __meta: {
           configured: true,
           schemaReady: true,
@@ -65,7 +69,7 @@ export async function GET(request) {
     }
 
     const isAdmin = sessionUser.role === 'admin';
-    const [usersRes, studentsRes, subjectsRes, indicatorsRes, coursesRes, summariesRes] =
+    const [usersRes, studentsRes, subjectsRes, indicatorsRes, coursesRes, summariesRes, docsRes] =
       await Promise.all([
         isAdmin
           ? db.execute('SELECT * FROM users')
@@ -77,6 +81,7 @@ export async function GET(request) {
         db.execute('SELECT * FROM curriculum_indicators'),
         db.execute('SELECT * FROM teacher_courses'),
         db.execute('SELECT * FROM classroom_pp5_summaries'),
+        db.execute('SELECT * FROM academic_documents'),
       ]);
 
     const mappedUsers = sortUsers(
@@ -93,6 +98,9 @@ export async function GET(request) {
       courses: sortCourses((coursesRes.rows || []).map(mapCourseRow)),
       classroomSummaries: sortStudents(
         (summariesRes.rows || []).map(mapClassroomSummaryRow)
+      ),
+      academicDocuments: sortAcademicDocuments(
+        (docsRes.rows || []).map(mapAcademicDocumentRow)
       ),
       __meta: {
         configured: true,

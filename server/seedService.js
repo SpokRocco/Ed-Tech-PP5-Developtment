@@ -11,6 +11,7 @@ import {
   DEMO_CHARACTERISTICS_SCORES,
   DEMO_CLASSROOM_SUMMARIES,
   DEMO_PRIMARY_2568_ASSESSMENTS,
+  DEMO_ACADEMIC_DOCUMENTS,
 } from '../src/data/demoSeedData.js';
 import { ensureSchema, runBatchChunked } from './db.js';
 import { hashPassword } from './auth.js';
@@ -497,7 +498,43 @@ export async function seedDatabaseWithClient(
     });
   }
 
-  // Wait: catch typo before writing (`excluded.grade_3_central_result_fix` -> `excluded.grade3_central_result`)!
+  // 13. academic_documents (ปพ.4, ปพ.7, ปพ.8, อบ.1-3, อบ.1-3 (2569), เทียบผล ปพ.1)
+  for (const doc of DEMO_ACADEMIC_DOCUMENTS) {
+    statements.push({
+      sql: `INSERT INTO academic_documents (
+              id, doc_type, title, grade_level, classroom, academic_year, semester,
+              student_id, owner_id, status, completion_pct, payload, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              doc_type = excluded.doc_type,
+              title = excluded.title,
+              grade_level = excluded.grade_level,
+              classroom = excluded.classroom,
+              academic_year = excluded.academic_year,
+              semester = excluded.semester,
+              student_id = excluded.student_id,
+              status = excluded.status,
+              completion_pct = excluded.completion_pct,
+              payload = excluded.payload,
+              updated_at = excluded.updated_at`,
+      args: [
+        doc.id,
+        doc.doc_type,
+        doc.title,
+        doc.grade_level || '',
+        String(doc.classroom || '1'),
+        doc.academic_year || '2569',
+        String(doc.semester || '1'),
+        doc.student_id || null,
+        doc.owner_id,
+        doc.status || 'in_progress',
+        Number(doc.completion_pct ?? 0),
+        JSON.stringify(doc.payload || {}),
+        doc.updated_at || nowIso,
+      ],
+    });
+  }
+
   await runBatchChunked(db, statements, 70);
   return { seededStatements: statements.length };
 }

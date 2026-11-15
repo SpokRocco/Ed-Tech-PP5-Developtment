@@ -10,6 +10,7 @@ import { TeacherDashboard } from './pages/TeacherDashboard';
 import { CoursePp5Workspace } from './pages/CoursePp5Workspace';
 import { ClassroomPp5Page } from './pages/ClassroomPp5Page';
 import { Primary2568Page } from './pages/Primary2568Page';
+import { AcademicDocumentWorkspace } from './pages/AcademicDocumentWorkspace';
 
 function RoleHomeRedirect() {
   const { user, loading } = useAuth();
@@ -95,6 +96,38 @@ export default function App() {
               element={
                 <ProtectedRoute allowedRoles={['teacher', 'executive', 'admin']}>
                   <Primary2568Page />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/primary-2569"
+              element={
+                <ProtectedRoute allowedRoles={['teacher', 'executive', 'admin']}>
+                  <Primary2568Page />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/documents"
+              element={
+                <ProtectedRoute allowedRoles={['teacher', 'executive', 'admin']}>
+                  <AcademicDocumentWorkspace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/documents/:docType"
+              element={
+                <ProtectedRoute allowedRoles={['teacher', 'executive', 'admin']}>
+                  <AcademicDocumentWorkspace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/documents/:docType/:docId"
+              element={
+                <ProtectedRoute allowedRoles={['teacher', 'executive', 'admin']}>
+                  <AcademicDocumentWorkspace />
                 </ProtectedRoute>
               }
             />

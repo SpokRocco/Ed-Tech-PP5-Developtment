@@ -19,6 +19,7 @@ import { StatCard } from '../components/common/StatCard';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Modal } from '../components/common/Modal';
 import { DocumentTypesCatalog } from '../components/common/DocumentTypesCatalog';
+import { MyDocumentsSection } from '../components/documents/MyDocumentsSection';
 
 export function ExecutiveDashboard() {
   const { settings, users, students, courses, saveCourse } = useSchoolData();
@@ -57,7 +58,10 @@ export function ExecutiveDashboard() {
   const courseMap = useMemo(() => new Map(courses.map((c) => [c.id, c])), [courses]);
 
   const courseCompletions = useMemo(() => {
-    const structMap = new Map((scoreStructures || []).map((st) => [st.course_id, st]));
+    const structureList = Array.isArray(scoreStructures)
+      ? scoreStructures
+      : Object.values(scoreStructures || {});
+    const structMap = new Map(structureList.map((st) => [st.course_id, st]));
     const out = {};
     courses.forEach((c) => {
       out[c.id] = computeCourseCompletion(c, {
@@ -254,6 +258,15 @@ export function ExecutiveDashboard() {
 
       {/* Academic Document Hubs */}
       <DocumentTypesCatalog />
+
+      <MyDocumentsSection
+        myCourses={courses}
+        courseCompletions={courseCompletions}
+        allScores={allScores}
+        allAttendance={allAttendance}
+        allCharacteristics={allCharacteristics}
+        scoreStructures={scoreStructures}
+      />
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -14,6 +14,7 @@ export function SchoolDataProvider({ children }) {
   const [indicators, setIndicators] = useState([]);
   const [courses, setCourses] = useState([]);
   const [classroomSummaries, setClassroomSummaries] = useState([]);
+  const [academicDocuments, setAcademicDocuments] = useState([]);
   const [schemaMeta, setSchemaMeta] = useState({
     configured: false,
     schemaReady: false,
@@ -33,6 +34,7 @@ export function SchoolDataProvider({ children }) {
       setIndicators(data.indicators || []);
       setCourses(data.courses || []);
       setClassroomSummaries(data.classroomSummaries || []);
+      setAcademicDocuments(data.academicDocuments || []);
       if (data.__meta) setSchemaMeta(data.__meta);
     } catch (err) {
       console.error('Failed to load school bootstrap data:', err);
@@ -115,6 +117,23 @@ export function SchoolDataProvider({ children }) {
     return saved;
   };
 
+  const saveAcademicDocument = async (docObj) => {
+    const saved = await dataService.saveAcademicDocument(docObj);
+    setAcademicDocuments((prev) => {
+      const exists = prev.some((d) => d.id === saved.id);
+      const next = exists ? prev.map((d) => (d.id === saved.id ? saved : d)) : [saved, ...prev];
+      return [...next].sort((a, b) =>
+        String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
+      );
+    });
+    return saved;
+  };
+
+  const deleteAcademicDocument = async (docId) => {
+    await dataService.deleteAcademicDocument(docId);
+    setAcademicDocuments((prev) => prev.filter((d) => d.id !== docId));
+  };
+
   const seedDatabase = async () => {
     await dataService.seedInitialDatabase(user);
     await refreshAll();
@@ -135,6 +154,7 @@ export function SchoolDataProvider({ children }) {
         indicators,
         courses,
         classroomSummaries,
+        academicDocuments,
         schemaMeta,
         loading,
         refreshAll,
@@ -149,6 +169,8 @@ export function SchoolDataProvider({ children }) {
         saveCourse,
         deleteCourse,
         saveClassroomSummary,
+        saveAcademicDocument,
+        deleteAcademicDocument,
         seedDatabase,
         resetDemo,
       }}

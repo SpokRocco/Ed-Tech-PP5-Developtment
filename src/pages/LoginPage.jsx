@@ -18,6 +18,7 @@ import { DEMO_USERS } from '../data/demoSeedData';
 import { AppHeader } from '../components/layout/AppHeader';
 import { AppFooter } from '../components/layout/AppFooter';
 import { SchoolLogo } from '../components/layout/SchoolEmblem';
+import { DocumentTypesCatalog } from '../components/common/DocumentTypesCatalog';
 
 export function LoginPage() {
   const {
@@ -43,6 +44,12 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [previewNotice, setPreviewNotice] = useState('');
+
+  const handlePreviewDocSelect = (doc) => {
+    setPreviewNotice(`กรุณาเข้าสู่ระบบ (หรือคลิกบัญชี Demo ด้านล่าง) เพื่อเปิดใช้งาน ${doc.icon} ${doc.shortLabel}`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const redirectByRole = (role) => {
     if (role === 'executive') navigate('/executive');
@@ -78,7 +85,7 @@ export function LoginPage() {
     <div className="min-h-screen flex flex-col bg-ivory-100">
       <AppHeader settings={settings} user={null} isLiveBackend={isLiveBackend} />
 
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 flex items-center">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full items-stretch">
           {/* Left Hero Panel */}
           <div className="lg:col-span-7 rounded-3xl bg-gradient-to-br from-navy-900 via-navy-800 to-royal-900 text-white p-8 sm:p-10 shadow-academic border border-gold-500/30 flex flex-col justify-between relative overflow-hidden">
@@ -247,6 +254,11 @@ export function LoginPage() {
                     <Database className="w-4 h-4 shrink-0" /> {authNotice}
                   </div>
                 )}
+                {previewNotice && (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-center gap-2">
+                    <Lock className="w-4 h-4 shrink-0 text-amber-600" /> {previewNotice}
+                  </div>
+                )}
 
                 <button
                   type="submit"
@@ -307,6 +319,9 @@ export function LoginPage() {
             )}
           </div>
         </div>
+
+        {/* แสดงเอกสารครบทั้ง 14 ประเภทก่อนเข้าสู่ระบบ */}
+        <DocumentTypesCatalog previewOnly onPreviewSelect={handlePreviewDocSelect} />
       </main>
 
       <AppFooter settings={settings} />

@@ -113,6 +113,7 @@ export async function DELETE(request) {
       [
         'PRAGMA foreign_keys = ON',
         { sql: 'DELETE FROM sessions WHERE user_id = ?', args: [targetId] },
+        { sql: 'DELETE FROM academic_documents WHERE owner_id = ?', args: [targetId] },
         { sql: 'DELETE FROM users WHERE id = ? OR LOWER(email) = LOWER(?)', args: [targetId, targetId] },
       ],
       'write'
