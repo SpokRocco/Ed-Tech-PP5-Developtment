@@ -7,7 +7,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useSchoolData } from '../../hooks/useSchoolData';
 
 export function MainLayout({ children }) {
-  const { user, logout, isLiveSupabase } = useAuth();
+  const { user, logout, isLiveBackend } = useAuth();
   const { settings } = useSchoolData();
 
   const navItems = [];
@@ -52,7 +52,7 @@ export function MainLayout({ children }) {
       <AppHeader
         settings={settings}
         user={user}
-        isLiveSupabase={isLiveSupabase}
+        isLiveBackend={isLiveBackend}
         onLogout={logout}
       />
 

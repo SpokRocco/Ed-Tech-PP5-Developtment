@@ -2,18 +2,20 @@
   "name": "banhatkhet-pp5-academic-system",
   "private": true,
   "version": "1.0.0",
-  "description": "ระบบบันทึกผลการเรียนและเอกสารวัดผลประเมินผล (ปพ.5) ออนไลน์ โรงเรียนบ้านหาดเค็ด สพป.น่าน เขต 1",
+  "description": "ระบบบันทึกผลการเรียนและเอกสารวัดผลประเมินผล (ปพ.5) ออนไลน์ โรงเรียนบ้านหาดเค็ด สพป.น่าน เขต 1 (Turso SQL + Vercel Functions)",
   "type": "module",
   "scripts": {
     "dev": "vite --port 8080",
     "build": "vite build",
-    "preview": "vite preview --port 8080"
+    "preview": "vite preview --port 8080",
+    "db:push": "node scripts/pushSchema.mjs",
+    "seed:turso": "node scripts/seedTurso.mjs"
   },
   "dependencies": {
     "@fontsource/kanit": "^5.1.0",
     "@fontsource/prompt": "^5.1.0",
     "@fontsource/sarabun": "^5.1.0",
-    "@supabase/supabase-js": "^2.49.1",
+    "@libsql/client": "^0.17.2",
     "docx": "^9.1.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.2",

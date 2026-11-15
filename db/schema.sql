@@ -1,0 +1,239 @@
+-- Ban Hat Khet School Pp.5 Academic System
+-- Normalized Relational Schema for Turso / libSQL (SQLite)
+-- Strictly separated from any `hadket` database resources.
+
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS system_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  school_name TEXT NOT NULL,
+  affiliation TEXT NOT NULL,
+  affiliation_short TEXT NOT NULL DEFAULT '',
+  school_code TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  academic_year TEXT NOT NULL DEFAULT '2569',
+  semester TEXT NOT NULL DEFAULT '1',
+  director_name TEXT NOT NULL DEFAULT '',
+  director_title TEXT NOT NULL DEFAULT '',
+  academic_head_name TEXT NOT NULL DEFAULT '',
+  registrar_name TEXT NOT NULL DEFAULT '',
+  logo_url TEXT NOT NULL DEFAULT '/school-logo.webp',
+  emblem_url TEXT NOT NULL DEFAULT '',
+  director_signature_url TEXT NOT NULL DEFAULT '',
+  cover_config TEXT NOT NULL DEFAULT '{}',
+  scoring_preset TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT,
+  full_name TEXT NOT NULL,
+  position TEXT NOT NULL DEFAULT 'ครู',
+  academic_standing TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL CHECK (role IN ('executive', 'admin', 'teacher')),
+  learning_area TEXT NOT NULL DEFAULT '',
+  homeroom_grade TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_role_name ON users (role, full_name);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+
+CREATE TABLE IF NOT EXISTS students (
+  id TEXT PRIMARY KEY,
+  student_code TEXT NOT NULL UNIQUE,
+  prefix TEXT NOT NULL DEFAULT '',
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL DEFAULT '',
+  gender TEXT NOT NULL DEFAULT '',
+  grade_level TEXT NOT NULL,
+  classroom TEXT NOT NULL DEFAULT '1',
+  student_number INTEGER NOT NULL DEFAULT 1,
+  academic_year TEXT NOT NULL DEFAULT '2569',
+  status TEXT NOT NULL DEFAULT 'active',
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_students_grade_room
+  ON students (grade_level, classroom, student_number);
+
+CREATE TABLE IF NOT EXISTS subjects (
+  id TEXT PRIMARY KEY,
+  subject_code TEXT NOT NULL,
+  subject_name TEXT NOT NULL,
+  learning_area TEXT NOT NULL,
+  grade_level TEXT NOT NULL,
+  subject_type TEXT NOT NULL DEFAULT 'พื้นฐาน',
+  credits REAL,
+  hours_per_semester INTEGER,
+  hours_per_week REAL,
+  hours_per_year INTEGER,
+  semester TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 1,
+  curriculum_year TEXT NOT NULL DEFAULT '2551/2560',
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+  updated_at TEXT NOT NULL,
+  UNIQUE (subject_code, grade_level)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subjects_grade_sort
+  ON subjects (grade_level, sort_order, subject_code);
+
+CREATE TABLE IF NOT EXISTS curriculum_indicators (
+  id TEXT PRIMARY KEY,
+  indicator_code TEXT NOT NULL UNIQUE,
+  learning_area TEXT NOT NULL,
+  strand TEXT NOT NULL DEFAULT '',
+  standard_code TEXT NOT NULL DEFAULT '',
+  standard_text TEXT NOT NULL DEFAULT '',
+  grade_level TEXT NOT NULL DEFAULT '',
+  indicator_type TEXT NOT NULL DEFAULT '',
+  indicator_text TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_indicators_area_grade
+  ON curriculum_indicators (learning_area, grade_level, indicator_code);
+
+CREATE TABLE IF NOT EXISTS teacher_courses (
+  id TEXT PRIMARY KEY,
+  subject_id TEXT REFERENCES subjects(id) ON DELETE SET NULL,
+  subject_code TEXT NOT NULL,
+  subject_name TEXT NOT NULL,
+  learning_area TEXT NOT NULL DEFAULT '',
+  subject_type TEXT NOT NULL DEFAULT 'พื้นฐาน',
+  teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  grade_level TEXT NOT NULL,
+  classroom TEXT NOT NULL DEFAULT '1',
+  academic_year TEXT NOT NULL,
+  semester TEXT NOT NULL,
+  credits REAL,
+  total_hours INTEGER,
+  student_ids TEXT NOT NULL DEFAULT '[]',
+  selected_indicator_ids TEXT NOT NULL DEFAULT '[]',
+  custom_indicators_text TEXT NOT NULL DEFAULT '',
+  indicators_status TEXT NOT NULL DEFAULT 'sample',
+  cover_settings TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'in_progress'
+    CHECK (status IN ('draft', 'in_progress', 'completed', 'submitted', 'approved')),
+  submitted_at TEXT,
+  approved_by TEXT,
+  approved_at TEXT,
+  executive_comment TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_courses_teacher ON teacher_courses (teacher_id);
+CREATE INDEX IF NOT EXISTS idx_courses_grade_term
+  ON teacher_courses (grade_level, classroom, academic_year, semester);
+
+CREATE TABLE IF NOT EXISTS score_structures (
+  course_id TEXT PRIMARY KEY REFERENCES teacher_courses(id) ON DELETE CASCADE,
+  formative_ratio INTEGER NOT NULL DEFAULT 60,
+  midterm_ratio INTEGER NOT NULL DEFAULT 20,
+  final_ratio INTEGER NOT NULL DEFAULT 20,
+  grading_policy TEXT NOT NULL DEFAULT '{"minAttendancePct":80,"requireFinalExam":true}',
+  units TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attendance (
+  id TEXT PRIMARY KEY,
+  course_id TEXT NOT NULL REFERENCES teacher_courses(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL,
+  session_date TEXT NOT NULL,
+  period_number INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL,
+  remark TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL,
+  UNIQUE (course_id, student_id, session_date, period_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attendance_course_date
+  ON attendance (course_id, session_date, period_number);
+
+CREATE TABLE IF NOT EXISTS student_scores (
+  id TEXT PRIMARY KEY,
+  course_id TEXT NOT NULL REFERENCES teacher_courses(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL,
+  unit_scores TEXT NOT NULL DEFAULT '{}',
+  formative_total REAL,
+  midterm_score REAL,
+  final_score REAL,
+  total_score REAL,
+  grade TEXT NOT NULL DEFAULT '',
+  special_status TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE (course_id, student_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_scores_course ON student_scores (course_id);
+
+CREATE TABLE IF NOT EXISTS characteristics_scores (
+  id TEXT PRIMARY KEY,
+  course_id TEXT NOT NULL REFERENCES teacher_courses(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL,
+  characteristics_config TEXT NOT NULL DEFAULT '{}',
+  traits TEXT NOT NULL DEFAULT '{}',
+  traits_avg REAL,
+  traits_level INTEGER,
+  reading_thinking_writing TEXT NOT NULL DEFAULT '{}',
+  rtw_avg REAL,
+  rtw_level INTEGER,
+  updated_at TEXT NOT NULL,
+  UNIQUE (course_id, student_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_characteristics_course ON characteristics_scores (course_id);
+
+CREATE TABLE IF NOT EXISTS classroom_pp5_summaries (
+  id TEXT PRIMARY KEY,
+  grade_level TEXT NOT NULL,
+  classroom TEXT NOT NULL DEFAULT '1',
+  academic_year TEXT NOT NULL,
+  semester TEXT NOT NULL,
+  homeroom_teacher_id TEXT,
+  student_decisions TEXT NOT NULL DEFAULT '{}',
+  activities_summary TEXT NOT NULL DEFAULT '{}',
+  class_notes TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'in_progress',
+  executive_comment TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL,
+  UNIQUE (grade_level, classroom, academic_year, semester)
+);
+
+CREATE TABLE IF NOT EXISTS primary2568_assessments (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  grade_level TEXT NOT NULL,
+  classroom TEXT NOT NULL DEFAULT '1',
+  academic_year TEXT NOT NULL,
+  semester TEXT NOT NULL,
+  capabilities TEXT NOT NULL DEFAULT '{}',
+  traits_5 TEXT NOT NULL DEFAULT '{}',
+  activities_pass INTEGER NOT NULL DEFAULT 1 CHECK (activities_pass IN (0, 1)),
+  grade3_central_result TEXT NOT NULL DEFAULT '',
+  teacher_comment TEXT NOT NULL DEFAULT '',
+  school_level_labels TEXT NOT NULL DEFAULT '{}',
+  recorded_by TEXT,
+  updated_at TEXT NOT NULL,
+  UNIQUE (student_id, academic_year, semester)
+);
+
+CREATE INDEX IF NOT EXISTS idx_primary2568_grade_room
+  ON primary2568_assessments (grade_level, classroom, academic_year, semester);

@@ -1,70 +1,24 @@
 import {
-  supabase,
-  isSupabaseConfigured,
-  isSchemaReadyForLive,
-  markSchemaReady,
-  getStoredRuntimeMode,
-} from '../lib/supabaseClient';
-import {
-  DEMO_SYSTEM_SETTINGS,
-  DEMO_USERS,
-  DEMO_STUDENTS,
-  DEMO_SUBJECTS,
-  DEMO_INDICATORS,
-  DEMO_COURSES,
-  DEMO_SCORE_STRUCTURES,
   DEMO_ATTENDANCE,
-  DEMO_STUDENT_SCORES,
   DEMO_CHARACTERISTICS_SCORES,
   DEMO_CLASSROOM_SUMMARIES,
+  DEMO_COURSES,
+  DEMO_INDICATORS,
   DEMO_PRIMARY_2568_ASSESSMENTS,
+  DEMO_SCORE_STRUCTURES,
+  DEMO_STUDENTS,
+  DEMO_STUDENT_SCORES,
+  DEMO_SUBJECTS,
+  DEMO_SYSTEM_SETTINGS,
+  DEMO_USERS,
 } from '../data/demoSeedData';
+import { isBackendReadyForLive, setBackendStatus } from '../lib/mediaUtils';
+import { GRADE_LEVELS } from '../lib/thaiFormatting';
 
-const STORAGE_KEY = 'banhatkhet_pp5_demo_db_v3';
+const DEMO_DB_KEY = 'banhatkhet_pp5_demo_db_v3';
 
-function loadDemoDb() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        ...parsed,
-        classroomSummaries: parsed.classroomSummaries || DEMO_CLASSROOM_SUMMARIES,
-        primary2568Assessments: parsed.primary2568Assessments || DEMO_PRIMARY_2568_ASSESSMENTS,
-      };
-    }
-  } catch {
-    // ignore corrupted cache
-  }
-  const initial = {
-    settings: DEMO_SYSTEM_SETTINGS,
-    users: DEMO_USERS,
-    students: DEMO_STUDENTS,
-    subjects: DEMO_SUBJECTS,
-    indicators: DEMO_INDICATORS,
-    courses: DEMO_COURSES,
-    scoreStructures: DEMO_SCORE_STRUCTURES,
-    attendance: DEMO_ATTENDANCE,
-    studentScores: DEMO_STUDENT_SCORES,
-    characteristicsScores: DEMO_CHARACTERISTICS_SCORES,
-    classroomSummaries: DEMO_CLASSROOM_SUMMARIES,
-    primary2568Assessments: DEMO_PRIMARY_2568_ASSESSMENTS,
-  };
-  saveDemoDb(initial);
-  return initial;
-}
-
-function saveDemoDb(db) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-  } catch {
-    // ignore storage quota errors
-  }
-}
-
-export function resetDemoDatabase() {
-  localStorage.removeItem(STORAGE_KEY);
-  return loadDemoDb();
+function clone(obj) {
+  return JSON.parse(JSON.stringify(obj));
 }
 
 function makeUuid() {
@@ -74,567 +28,705 @@ function makeUuid() {
   return 'id-' + Math.random().toString(36).slice(2, 11) + '-' + Date.now();
 }
 
-export const dataService = {
-  async probeSupabaseSchema() {
-    if (!isSchemaReadyForLive()) {
-      markSchemaReady(false);
-      return { configured: false, schemaReady: false, reason: 'unconfigured' };
-    }
-    try {
-      const { data, error } = await supabase.from('system_settings').select('id').limit(1);
-      if (error || !data?.length) {
-        markSchemaReady(false);
+function toNullableNumber(val) {
+  if (val === undefined || val === null || val === '') return null;
+  const n = Number(val);
+  return Number.isNaN(n) ? null : n;
+}
+
+function gradeRank(grade) {
+  const idx = GRADE_LEVELS.indexOf(grade);
+  return idx >= 0 ? idx : 999;
+}
+
+function sortUsers(list) {
+  return [...list].sort((a, b) => {
+    const r = String(a.role || '').localeCompare(String(b.role || ''));
+    if (r !== 0) return r;
+    return String(a.full_name || '').localeCompare(String(b.full_name || ''), 'th');
+  });
+}
+
+function sortStudents(list) {
+  return [...list].sort((a, b) => {
+    const g = gradeRank(a.grade_level) - gradeRank(b.grade_level);
+    if (g !== 0) return g;
+    const c = String(a.classroom || '').localeCompare(String(b.classroom || ''), 'th');
+    if (c !== 0) return c;
+    return Number(a.student_number || 999) - Number(b.student_number || 999);
+  });
+}
+
+function sortSubjects(list) {
+  return [...list].sort((a, b) => {
+    const g = gradeRank(a.grade_level) - gradeRank(b.grade_level);
+    if (g !== 0) return g;
+    const s = Number(a.sort_order ?? 999) - Number(b.sort_order ?? 999);
+    if (s !== 0) return s;
+    return String(a.subject_code || '').localeCompare(String(b.subject_code || ''), 'th');
+  });
+}
+
+function sortIndicators(list) {
+  return [...list].sort((a, b) => {
+    const l = String(a.learning_area || '').localeCompare(String(b.learning_area || ''), 'th');
+    if (l !== 0) return l;
+    return String(a.indicator_code || '').localeCompare(String(b.indicator_code || ''), 'th');
+  });
+}
+
+function defaultScoreStructure(courseId) {
+  return {
+    course_id: courseId,
+    formative_ratio: 60,
+    midterm_ratio: 20,
+    final_ratio: 20,
+    grading_policy: { minAttendancePct: 80, requireFinalExam: true },
+    units: [
+      { id: 'u1', name: 'หน่วยการเรียนรู้ที่ 1', category: 'formative', maxScore: 30, indicatorCodes: [] },
+      { id: 'u2', name: 'หน่วยการเรียนรู้ที่ 2', category: 'formative', maxScore: 30, indicatorCodes: [] },
+      { id: 'mid', name: 'สอบกลางภาคเรียน', category: 'midterm', maxScore: 20, indicatorCodes: [] },
+      { id: 'fin', name: 'สอบปลายภาคเรียน', category: 'final', maxScore: 20, indicatorCodes: [] },
+    ],
+  };
+}
+
+function initialDemoDb() {
+  return {
+    settings: clone(DEMO_SYSTEM_SETTINGS),
+    users: clone(DEMO_USERS),
+    students: clone(DEMO_STUDENTS),
+    subjects: clone(DEMO_SUBJECTS),
+    indicators: clone(DEMO_INDICATORS),
+    courses: clone(DEMO_COURSES),
+    scoreStructures: clone(DEMO_SCORE_STRUCTURES),
+    attendance: clone(DEMO_ATTENDANCE),
+    studentScores: clone(DEMO_STUDENT_SCORES),
+    characteristicsScores: clone(DEMO_CHARACTERISTICS_SCORES),
+    classroomSummaries: clone(DEMO_CLASSROOM_SUMMARIES),
+    primary2568Assessments: clone(DEMO_PRIMARY_2568_ASSESSMENTS),
+  };
+}
+
+function loadDemoDb() {
+  try {
+    const raw = localStorage.getItem(DEMO_DB_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.settings?.logo_url && String(parsed.settings.logo_url).includes('fhfckuypfstlokashcmu')) {
+        parsed.settings.logo_url = '/school-logo.webp';
+        saveDemoDb(parsed);
+      }
+      if (parsed?.settings && Array.isArray(parsed?.subjects)) {
         return {
-          configured: true,
-          schemaReady: false,
-          reason: error?.message || 'tables_unseeded',
+          ...initialDemoDb(),
+          ...parsed,
         };
       }
-      markSchemaReady(true);
-      return { configured: true, schemaReady: true, reason: '' };
-    } catch (err) {
-      markSchemaReady(false);
-      return { configured: true, schemaReady: false, reason: err?.message || 'network_error' };
     }
-  },
+  } catch (err) {
+    console.warn('Could not load demo DB from localStorage:', err);
+  }
+  const fresh = initialDemoDb();
+  saveDemoDb(fresh);
+  return fresh;
+}
 
-  async fetchBootstrapData() {
-    const probe = await this.probeSupabaseSchema();
-    if (!probe.schemaReady || getStoredRuntimeMode() === 'demo') {
-      const demo = loadDemoDb();
-      return { ...demo, __meta: probe };
-    }
+function saveDemoDb(dbData) {
+  try {
+    localStorage.setItem(DEMO_DB_KEY, JSON.stringify(dbData));
+  } catch (err) {
+    console.warn('Could not save demo DB to localStorage:', err);
+  }
+}
 
-    const [
-      settingsRes,
-      usersRes,
-      studentsRes,
-      subjectsRes,
-      indicatorsRes,
-      coursesRes,
-      classroomRes,
-    ] = await Promise.all([
-      supabase.from('system_settings').select('*').eq('id', 1).maybeSingle(),
-      supabase.from('users').select('*').order('role').order('full_name'),
-      supabase.from('students').select('*').order('grade_level').order('classroom').order('student_number'),
-      supabase.from('subjects').select('*').order('grade_level').order('subject_code'),
-      supabase.from('curriculum_indicators').select('*').order('learning_area').order('indicator_code'),
-      supabase.from('teacher_courses').select('*').order('updated_at', { ascending: false }),
-      supabase.from('classroom_pp5_summaries').select('*').order('grade_level'),
-    ]);
+export function resetDemoDatabase() {
+  const fresh = initialDemoDb();
+  saveDemoDb(fresh);
+  return fresh;
+}
 
-    return {
-      settings: settingsRes.data || DEMO_SYSTEM_SETTINGS,
-      users: usersRes.data || [],
-      students: studentsRes.data || [],
-      subjects: subjectsRes.data || [],
-      indicators: indicatorsRes.data?.length ? indicatorsRes.data : DEMO_INDICATORS,
-      courses: coursesRes.data || [],
-      classroomSummaries: classroomRes.data || [],
-      __meta: probe,
-    };
-  },
+async function apiRequest(url, options = {}) {
+  const { method = 'GET', body } = options;
+  const init = {
+    method,
+    credentials: 'include',
+    headers: {},
+  };
+  if (body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    const msg =
+      (data && (data.error || data.message)) ||
+      `คำขอไม่สำเร็จ (HTTP ${res.status})`;
+    const error = new Error(msg);
+    error.status = res.status;
+    error.payload = data;
+    throw error;
+  }
+  return data || {};
+}
 
-  async fetchCourseDetails(courseId) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      return {
-        scoreStructure: db.scoreStructures[courseId] || {
-          course_id: courseId,
-          formative_ratio: 60,
-          midterm_ratio: 20,
-          final_ratio: 20,
-          grading_policy: { minAttendancePct: 80, requireFinalExam: true },
-          units: [],
-        },
-        attendance: db.attendance.filter((a) => a.course_id === courseId),
-        studentScores: db.studentScores[courseId] || [],
-        characteristicsScores: db.characteristicsScores[courseId] || [],
-      };
-    }
-
-    const [structRes, attRes, scoresRes, charRes] = await Promise.all([
-      supabase.from('score_structures').select('*').eq('course_id', courseId).maybeSingle(),
-      supabase.from('attendance').select('*').eq('course_id', courseId).order('session_date'),
-      supabase.from('student_scores').select('*').eq('course_id', courseId),
-      supabase.from('characteristics_scores').select('*').eq('course_id', courseId),
-    ]);
-
-    return {
-      scoreStructure: structRes.data || {
-        course_id: courseId,
-        formative_ratio: 60,
-        midterm_ratio: 20,
-        final_ratio: 20,
-        grading_policy: { minAttendancePct: 80, requireFinalExam: true },
-        units: [],
-      },
-      attendance: attRes.data || [],
-      studentScores: scoresRes.data || [],
-      characteristicsScores: charRes.data || [],
-    };
-  },
-
-  async fetchAllSchoolAttendance() {
-    if (!isSchemaReadyForLive()) {
-      return loadDemoDb().attendance;
-    }
-    const { data } = await supabase.from('attendance').select('*');
-    return data || [];
-  },
-
-  async fetchAllSchoolScores() {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      return Object.values(db.studentScores).flat();
-    }
-    const { data } = await supabase.from('student_scores').select('*');
-    return data || [];
-  },
-
-  async fetchAllSchoolCharacteristics() {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      return Object.values(db.characteristicsScores).flat();
-    }
-    const { data } = await supabase.from('characteristics_scores').select('*');
-    return data || [];
-  },
-
-  async fetchAllSchoolScoreStructures() {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      return Object.values(db.scoreStructures || {});
-    }
-    const { data } = await supabase.from('score_structures').select('*');
-    return data || [];
-  },
-
-  async saveClassroomSummary(summaryObj) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const idx = db.classroomSummaries.findIndex(
-        (c) =>
-          (summaryObj.id && c.id === summaryObj.id) ||
-          (c.grade_level === summaryObj.grade_level &&
-            String(c.classroom) === String(summaryObj.classroom) &&
-            c.academic_year === summaryObj.academic_year &&
-            c.semester === summaryObj.semester)
-      );
-      const record = {
-        ...summaryObj,
-        id: summaryObj.id || (idx >= 0 ? db.classroomSummaries[idx].id : makeUuid()),
-        updated_at: new Date().toISOString(),
-      };
-      if (idx >= 0) db.classroomSummaries[idx] = { ...db.classroomSummaries[idx], ...record };
-      else db.classroomSummaries.push(record);
-      saveDemoDb(db);
-      return record;
-    }
-    const { data, error } = await supabase
-      .from('classroom_pp5_summaries')
-      .upsert(summaryObj, { onConflict: 'grade_level,classroom,academic_year,semester' })
-      .select()
-      .single();
-    if (error) throw error;
-    return data;
-  },
-
-  async fetchPrimary2568Assessments(gradeLevel, classroom) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      return (db.primary2568Assessments || []).filter(
-        (a) =>
-          (!gradeLevel || a.grade_level === gradeLevel) &&
-          (!classroom || String(a.classroom) === String(classroom))
-      );
-    }
-    let query = supabase.from('primary2568_assessments').select('*');
-    if (gradeLevel) query = query.eq('grade_level', gradeLevel);
-    if (classroom) query = query.eq('classroom', String(classroom));
-    const { data, error } = await query;
-    if (error) throw error;
-    return data || [];
-  },
-
-  async savePrimary2568Batch(rows) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const map = new Map(
-        (db.primary2568Assessments || []).map((r) => [
-          `${r.student_id}|${r.academic_year}|${r.semester}`,
-          r,
-        ])
-      );
-      for (const row of rows) {
-        const key = `${row.student_id}|${row.academic_year}|${row.semester}`;
-        const existing = map.get(key);
-        map.set(key, {
-          ...existing,
-          ...row,
-          id: existing?.id || row.id || makeUuid(),
-          updated_at: new Date().toISOString(),
-        });
+export const dataService = {
+  async probeBackend() {
+    try {
+      const res = await fetch('/api/health', { credentials: 'include' });
+      if (!res.ok) {
+        setBackendStatus({ configured: false, schemaReady: false });
+        return { configured: false, schemaReady: false, isSeeded: false, userCount: 0, authenticated: false };
       }
-      db.primary2568Assessments = Array.from(map.values());
-      saveDemoDb(db);
-      return db.primary2568Assessments;
+      const probe = await res.json();
+      setBackendStatus({
+        configured: Boolean(probe?.configured),
+        schemaReady: Boolean(probe?.schemaReady),
+      });
+      return probe;
+    } catch {
+      setBackendStatus({ configured: false, schemaReady: false });
+      return { configured: false, schemaReady: false, isSeeded: false, userCount: 0, authenticated: false };
     }
-    const { data, error } = await supabase
-      .from('primary2568_assessments')
-      .upsert(rows, { onConflict: 'student_id,academic_year,semester' })
-      .select();
-    if (error) throw error;
-    return data || [];
+  },
+
+  async fetchBootstrapData(currentUser = null) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      return {
+        settings: dbData.settings,
+        users: sortUsers(dbData.users),
+        students: sortStudents(dbData.students),
+        subjects: sortSubjects(dbData.subjects),
+        indicators: sortIndicators(dbData.indicators),
+        courses: dbData.courses,
+        classroomSummaries: dbData.classroomSummaries,
+        __meta: {
+          configured: false,
+          schemaReady: false,
+          isSeeded: true,
+          userCount: dbData.users.length,
+          reason: 'demo_mode',
+        },
+      };
+    }
+
+    if (!currentUser) {
+      return apiRequest('/api/bootstrap');
+    }
+    return apiRequest('/api/bootstrap');
+  },
+
+  async seedInitialDatabase(currentUser = null) {
+    if (!isBackendReadyForLive()) {
+      resetDemoDatabase();
+      return { ok: true, mode: 'demo' };
+    }
+    if (!currentUser || currentUser.role !== 'admin') {
+      throw new Error('เฉพาะผู้ดูแลระบบ (Admin) เท่านั้นที่ติดตั้งข้อมูลตั้งต้นเข้าฐานข้อมูลได้');
+    }
+    return apiRequest('/api/bootstrap', {
+      method: 'POST',
+      body: { action: 'seed' },
+    });
   },
 
   async updateSystemSettings(patch) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.settings = { ...db.settings, ...patch, updated_at: new Date().toISOString() };
-      saveDemoDb(db);
-      return db.settings;
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      dbData.settings = {
+        ...dbData.settings,
+        ...patch,
+        updated_at: new Date().toISOString(),
+      };
+      saveDemoDb(dbData);
+      return dbData.settings;
     }
-    const { data, error } = await supabase
-      .from('system_settings')
-      .upsert({ id: 1, ...patch })
-      .select()
-      .single();
-    if (error) throw error;
-    return data;
+    const res = await apiRequest('/api/settings', {
+      method: 'PUT',
+      body: patch,
+    });
+    return res.settings;
   },
 
   async saveUser(userObj) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const id = userObj.id || makeUuid();
-      const idx = db.users.findIndex((u) => u.id === id);
-      const record = { ...userObj, id };
-      if (idx >= 0) db.users[idx] = { ...db.users[idx], ...record };
-      else db.users.push(record);
-      saveDemoDb(db);
-      return record;
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const { initial_password: _ignoredPassword, ...cleanUser } = userObj;
+      const emailLower = String(cleanUser.email || '').trim().toLowerCase();
+      const existingIdx = dbData.users.findIndex(
+        (u) => u.id === cleanUser.id || (emailLower && String(u.email || '').toLowerCase() === emailLower)
+      );
+      const saved = {
+        ...cleanUser,
+        id: existingIdx >= 0 ? dbData.users[existingIdx].id : cleanUser.id || makeUuid(),
+        email: emailLower || cleanUser.email,
+        is_active: cleanUser.is_active !== false,
+        updated_at: new Date().toISOString(),
+      };
+      if (existingIdx >= 0) dbData.users[existingIdx] = { ...dbData.users[existingIdx], ...saved };
+      else dbData.users.push(saved);
+      saveDemoDb(dbData);
+      return existingIdx >= 0 ? dbData.users[existingIdx] : saved;
     }
-    const { data, error } = await supabase.from('users').upsert(userObj).select().single();
-    if (error) throw error;
-    return data;
+    const res = await apiRequest('/api/users', {
+      method: 'POST',
+      body: userObj,
+    });
+    return res.user;
   },
 
   async deleteUser(userId) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.users = db.users.filter((u) => u.id !== userId);
-      saveDemoDb(db);
-      return;
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      dbData.users = dbData.users.filter((u) => u.id !== userId);
+      saveDemoDb(dbData);
+      return { ok: true };
     }
-    const { error } = await supabase.from('users').delete().eq('id', userId);
-    if (error) throw error;
+    return apiRequest(`/api/users?id=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
   },
 
-  async upsertStudents(studentList) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const byCode = new Map(db.students.map((s) => [s.student_code, s]));
-      for (const stu of studentList) {
-        const existing = byCode.get(stu.student_code) || db.students.find((s) => s.id === stu.id);
-        if (existing) {
-          const updated = { ...existing, ...stu };
-          const idx = db.students.findIndex((s) => s.id === existing.id);
-          db.students[idx] = updated;
-        } else {
-          db.students.push({ ...stu, id: stu.id || makeUuid() });
-        }
-      }
-      saveDemoDb(db);
-      return db.students;
+  async upsertStudents(list) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      list.forEach((stu) => {
+        const idx = dbData.students.findIndex(
+          (s) => s.id === stu.id || (stu.student_code && s.student_code === stu.student_code)
+        );
+        const row = {
+          ...stu,
+          id: idx >= 0 ? dbData.students[idx].id : stu.id || `stu_${stu.student_code || makeUuid()}`,
+          updated_at: new Date().toISOString(),
+        };
+        if (idx >= 0) dbData.students[idx] = row;
+        else dbData.students.push(row);
+      });
+      saveDemoDb(dbData);
+      return sortStudents(dbData.students);
     }
-
-    const { error } = await supabase
-      .from('students')
-      .upsert(studentList, { onConflict: 'student_code' });
-    if (error) throw error;
-    const { data } = await supabase
-      .from('students')
-      .select('*')
-      .order('grade_level')
-      .order('classroom')
-      .order('student_number');
-    return data || [];
+    const res = await apiRequest('/api/students', {
+      method: 'POST',
+      body: { students: list },
+    });
+    return res.students || [];
   },
 
   async deleteStudent(studentId) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.students = db.students.filter((s) => s.id !== studentId);
-      saveDemoDb(db);
-      return;
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      dbData.students = dbData.students.filter((s) => s.id !== studentId);
+      saveDemoDb(dbData);
+      return { ok: true };
     }
-    const { error } = await supabase.from('students').delete().eq('id', studentId);
-    if (error) throw error;
+    return apiRequest(`/api/students?id=${encodeURIComponent(studentId)}`, {
+      method: 'DELETE',
+    });
   },
 
-  async upsertSubjects(subjectList) {
-    const BASE_SUBJECT_COLUMNS = [
-      'subject_code',
-      'subject_name',
-      'learning_area',
-      'grade_level',
-      'subject_type',
-      'credits',
-      'hours_per_semester',
-      'hours_per_week',
-      'curriculum_year',
-      'is_active',
-    ];
-    const EXTENDED_SUBJECT_COLUMNS = ['hours_per_year', 'semester', 'sort_order'];
-
-    const sanitizeSubject = (sub, includeExtended = true) => {
-      const allowed = includeExtended
-        ? [...BASE_SUBJECT_COLUMNS, ...EXTENDED_SUBJECT_COLUMNS]
-        : BASE_SUBJECT_COLUMNS;
-      const out = {};
-      for (const key of allowed) {
-        if (sub?.[key] !== undefined && sub?.[key] !== null && sub?.[key] !== '') {
-          out[key] = sub[key];
-        }
-      }
-      if (!out.subject_type) out.subject_type = 'พื้นฐาน';
-      if (!out.curriculum_year) out.curriculum_year = '2551/2560';
-      if (out.is_active === undefined) out.is_active = true;
-      if (out.credits !== undefined) out.credits = Number(out.credits);
-      if (out.hours_per_semester !== undefined) out.hours_per_semester = Number(out.hours_per_semester);
-      if (out.hours_per_week !== undefined) out.hours_per_week = Number(out.hours_per_week);
-      if (includeExtended) {
-        if (out.hours_per_year !== undefined) out.hours_per_year = Number(out.hours_per_year);
-        if (out.sort_order !== undefined) out.sort_order = Number(out.sort_order);
-        if (out.semester !== undefined) out.semester = String(out.semester);
-      }
-      return out;
-    };
-
-    const deduplicateSubjects = (rows) => {
-      const byKey = new Map();
-      for (const row of rows) {
-        const key = `${row.subject_code}::${row.grade_level}`;
-        const prev = byKey.get(key);
-        if (prev && prev.semester && row.semester && prev.semester !== row.semester) {
-          byKey.set(key, { ...prev, ...row, semester: '1-2' });
-        } else {
-          byKey.set(key, prev ? { ...prev, ...row } : row);
-        }
-      }
-      return Array.from(byKey.values());
-    };
-
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const cleaned = deduplicateSubjects((subjectList || []).map((s) => ({ ...sanitizeSubject(s, true), id: s.id })));
-      for (const sub of cleaned) {
-        const idx = db.subjects.findIndex(
+  async upsertSubjects(list) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      list.forEach((sub) => {
+        const clean = {
+          ...sub,
+          credits: toNullableNumber(sub.credits),
+          hours_per_semester: toNullableNumber(sub.hours_per_semester),
+          hours_per_week: toNullableNumber(sub.hours_per_week),
+          hours_per_year: toNullableNumber(sub.hours_per_year),
+          is_active: sub.is_active !== false,
+          updated_at: new Date().toISOString(),
+        };
+        const idx = dbData.subjects.findIndex(
           (s) =>
-            (sub.id && s.id === sub.id) ||
-            (s.subject_code === sub.subject_code && s.grade_level === sub.grade_level)
+            s.id === clean.id ||
+            (s.subject_code === clean.subject_code && s.grade_level === clean.grade_level)
         );
         if (idx >= 0) {
-          db.subjects[idx] = { ...db.subjects[idx], ...sub, id: db.subjects[idx].id || sub.id };
+          const prev = dbData.subjects[idx];
+          const mergedSemester =
+            prev.semester && clean.semester && prev.semester !== clean.semester
+              ? '1-2'
+              : clean.semester || prev.semester || '';
+          dbData.subjects[idx] = { ...prev, ...clean, id: prev.id, semester: mergedSemester };
         } else {
-          db.subjects.push({ ...sub, id: sub.id || makeUuid() });
+          dbData.subjects.push({
+            ...clean,
+            id: clean.id || `${clean.grade_level}__${clean.subject_code}`,
+          });
         }
-      }
-      saveDemoDb(db);
-      return db.subjects;
+      });
+      saveDemoDb(dbData);
+      return sortSubjects(dbData.subjects);
     }
-
-    const payloadFull = deduplicateSubjects((subjectList || []).map((s) => sanitizeSubject(s, true)));
-    let { error } = await supabase
-      .from('subjects')
-      .upsert(payloadFull, { onConflict: 'subject_code,grade_level' });
-
-    if (error && /hours_per_year|semester|sort_order|schema cache|column/i.test(error.message || '')) {
-      const payloadBase = deduplicateSubjects((subjectList || []).map((s) => sanitizeSubject(s, false)));
-      const retry = await supabase
-        .from('subjects')
-        .upsert(payloadBase, { onConflict: 'subject_code,grade_level' });
-      error = retry.error;
-    }
-
-    if (error) throw error;
-    const { data } = await supabase.from('subjects').select('*').order('grade_level').order('subject_code');
-    return data || [];
+    const res = await apiRequest('/api/curriculum', {
+      method: 'POST',
+      body: { action: 'upsert_subjects', subjects: list },
+    });
+    return res.subjects || [];
   },
 
   async deleteSubject(subjectId) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.subjects = db.subjects.filter((s) => s.id !== subjectId);
-      saveDemoDb(db);
-      return;
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      dbData.subjects = dbData.subjects.filter((s) => s.id !== subjectId);
+      saveDemoDb(dbData);
+      return { ok: true };
     }
-    const { error } = await supabase.from('subjects').delete().eq('id', subjectId);
-    if (error) throw error;
+    return apiRequest(`/api/curriculum?id=${encodeURIComponent(subjectId)}`, {
+      method: 'DELETE',
+    });
   },
 
-  async upsertIndicator(indicatorObj) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const id = indicatorObj.id || makeUuid();
-      const idx = db.indicators.findIndex((i) => i.id === id || i.indicator_code === indicatorObj.indicator_code);
-      const record = { ...indicatorObj, id };
-      if (idx >= 0) db.indicators[idx] = { ...db.indicators[idx], ...record };
-      else db.indicators.unshift(record);
-      saveDemoDb(db);
-      return db.indicators;
+  async upsertIndicator(indObj) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const idx = dbData.indicators.findIndex(
+        (i) => i.id === indObj.id || i.indicator_code === indObj.indicator_code
+      );
+      const row = {
+        ...indObj,
+        id: idx >= 0 ? dbData.indicators[idx].id : indObj.id || indObj.indicator_code || makeUuid(),
+        updated_at: new Date().toISOString(),
+      };
+      if (idx >= 0) dbData.indicators[idx] = row;
+      else dbData.indicators.push(row);
+      saveDemoDb(dbData);
+      return sortIndicators(dbData.indicators);
     }
-    const { error } = await supabase
-      .from('curriculum_indicators')
-      .upsert(indicatorObj, { onConflict: 'indicator_code' });
-    if (error) throw error;
-    const { data } = await supabase.from('curriculum_indicators').select('*').order('learning_area').order('indicator_code');
-    return data || [];
+    const res = await apiRequest('/api/curriculum', {
+      method: 'POST',
+      body: { action: 'upsert_indicator', indicator: indObj },
+    });
+    return res.indicators || [];
   },
 
   async saveCourse(courseObj) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const id = courseObj.id || makeUuid();
-      const idx = db.courses.findIndex((c) => c.id === id);
-      const record = { ...courseObj, id, updated_at: new Date().toISOString() };
-      if (idx >= 0) db.courses[idx] = { ...db.courses[idx], ...record };
-      else db.courses.unshift(record);
-      if (!db.scoreStructures[id]) {
-        db.scoreStructures[id] = {
-          course_id: id,
-          formative_ratio: 60,
-          midterm_ratio: 20,
-          final_ratio: 20,
-          grading_policy: { minAttendancePct: 80, requireFinalExam: true },
-          units: [
-            { id: 'u1', name: 'หน่วยการเรียนรู้ที่ 1', category: 'formative', maxScore: 30, indicatorCodes: [] },
-            { id: 'u2', name: 'หน่วยการเรียนรู้ที่ 2', category: 'formative', maxScore: 30, indicatorCodes: [] },
-            { id: 'mid', name: 'สอบกลางภาคเรียน', category: 'midterm', maxScore: 20, indicatorCodes: [] },
-            { id: 'fin', name: 'สอบปลายภาคเรียน', category: 'final', maxScore: 20, indicatorCodes: [] },
-          ],
-        };
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const nowIso = new Date().toISOString();
+      const idx = dbData.courses.findIndex((c) => c.id === courseObj.id);
+      const id = idx >= 0 ? dbData.courses[idx].id : courseObj.id || makeUuid();
+      const saved = {
+        ...(idx >= 0 ? dbData.courses[idx] : {}),
+        ...courseObj,
+        id,
+        updated_at: nowIso,
+      };
+      if (idx >= 0) {
+        dbData.courses[idx] = saved;
+      } else {
+        dbData.courses.unshift(saved);
+        if (!dbData.scoreStructures.some((s) => s.course_id === id)) {
+          dbData.scoreStructures.push({ ...defaultScoreStructure(id), updated_at: nowIso });
+        }
       }
-      saveDemoDb(db);
-      return record;
+      saveDemoDb(dbData);
+      return saved;
     }
-
-    const { data, error } = await supabase
-      .from('teacher_courses')
-      .upsert(courseObj)
-      .select()
-      .single();
-    if (error) throw error;
-    return data;
+    const res = await apiRequest('/api/courses', {
+      method: 'POST',
+      body: { action: 'save_course', course: courseObj },
+    });
+    return res.course;
   },
 
   async deleteCourse(courseId) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.courses = db.courses.filter((c) => c.id !== courseId);
-      saveDemoDb(db);
-      return;
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      dbData.courses = dbData.courses.filter((c) => c.id !== courseId);
+      dbData.scoreStructures = dbData.scoreStructures.filter((s) => s.course_id !== courseId);
+      dbData.attendance = dbData.attendance.filter((a) => a.course_id !== courseId);
+      dbData.studentScores = dbData.studentScores.filter((s) => s.course_id !== courseId);
+      dbData.characteristicsScores = dbData.characteristicsScores.filter((c) => c.course_id !== courseId);
+      saveDemoDb(dbData);
+      return { ok: true };
     }
-    const { error } = await supabase.from('teacher_courses').delete().eq('id', courseId);
-    if (error) throw error;
+    return apiRequest(`/api/courses?id=${encodeURIComponent(courseId)}`, {
+      method: 'DELETE',
+    });
   },
 
-  async saveAttendanceBatch(courseId, records) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      const map = new Map(
-        db.attendance.map((a) => [`${a.course_id}|${a.student_id}|${a.session_date}|${a.period_number}`, a])
-      );
-      for (const rec of records) {
-        const key = `${courseId}|${rec.student_id}|${rec.session_date}|${rec.period_number}`;
-        const existing = map.get(key);
-        map.set(key, {
-          ...existing,
-          ...rec,
-          course_id: courseId,
-          id: existing?.id || rec.id || makeUuid(),
-        });
-      }
-      db.attendance = Array.from(map.values());
-      saveDemoDb(db);
-      return db.attendance.filter((a) => a.course_id === courseId);
+  async fetchCourseDetails(courseId) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      return {
+        scoreStructure:
+          dbData.scoreStructures.find((s) => s.course_id === courseId) ||
+          defaultScoreStructure(courseId),
+        attendance: dbData.attendance
+          .filter((a) => a.course_id === courseId)
+          .sort((a, b) =>
+            String(a.session_date).localeCompare(String(b.session_date)) ||
+            Number(a.period_number || 1) - Number(b.period_number || 1)
+          ),
+        studentScores: dbData.studentScores.filter((s) => s.course_id === courseId),
+        characteristicsScores: dbData.characteristicsScores.filter((c) => c.course_id === courseId),
+      };
     }
-
-    const payload = records.map((r) => ({ ...r, course_id: courseId }));
-    const { error } = await supabase
-      .from('attendance')
-      .upsert(payload, { onConflict: 'course_id,student_id,session_date,period_number' });
-    if (error) throw error;
-    const { data } = await supabase.from('attendance').select('*').eq('course_id', courseId).order('session_date');
-    return data || [];
+    return apiRequest(`/api/courses?courseId=${encodeURIComponent(courseId)}`);
   },
 
-  async deleteAttendanceSession(courseId, sessionDate, periodNumber) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.attendance = db.attendance.filter(
-        (a) => !(a.course_id === courseId && a.session_date === sessionDate && Number(a.period_number) === Number(periodNumber))
-      );
-      saveDemoDb(db);
-      return db.attendance.filter((a) => a.course_id === courseId);
+  async fetchAllSchoolAttendance() {
+    if (!isBackendReadyForLive()) {
+      return loadDemoDb().attendance || [];
     }
-    const { error } = await supabase
-      .from('attendance')
-      .delete()
-      .eq('course_id', courseId)
-      .eq('session_date', sessionDate)
-      .eq('period_number', periodNumber);
-    if (error) throw error;
-    const { data } = await supabase.from('attendance').select('*').eq('course_id', courseId).order('session_date');
-    return data || [];
+    const res = await apiRequest('/api/courses?scope=all_attendance');
+    return res.rows || [];
+  },
+
+  async fetchAllSchoolScores() {
+    if (!isBackendReadyForLive()) {
+      return loadDemoDb().studentScores || [];
+    }
+    const res = await apiRequest('/api/courses?scope=all_scores');
+    return res.rows || [];
+  },
+
+  async fetchAllSchoolCharacteristics() {
+    if (!isBackendReadyForLive()) {
+      return loadDemoDb().characteristicsScores || [];
+    }
+    const res = await apiRequest('/api/courses?scope=all_characteristics');
+    return res.rows || [];
+  },
+
+  async fetchAllSchoolScoreStructures() {
+    if (!isBackendReadyForLive()) {
+      return loadDemoDb().scoreStructures || [];
+    }
+    const res = await apiRequest('/api/courses?scope=all_structures');
+    return res.rows || [];
   },
 
   async saveScoreStructure(courseId, structure) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.scoreStructures[courseId] = { ...structure, course_id: courseId };
-      saveDemoDb(db);
-      return db.scoreStructures[courseId];
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const idx = dbData.scoreStructures.findIndex((s) => s.course_id === courseId);
+      const saved = {
+        ...structure,
+        course_id: courseId,
+        updated_at: new Date().toISOString(),
+      };
+      if (idx >= 0) dbData.scoreStructures[idx] = saved;
+      else dbData.scoreStructures.push(saved);
+      saveDemoDb(dbData);
+      return saved;
     }
-    const { data, error } = await supabase
-      .from('score_structures')
-      .upsert({ ...structure, course_id: courseId }, { onConflict: 'course_id' })
-      .select()
-      .single();
-    if (error) throw error;
-    return data;
+    const res = await apiRequest('/api/courses', {
+      method: 'POST',
+      body: { action: 'save_structure', courseId, structure },
+    });
+    return res.scoreStructure;
+  },
+
+  async saveAttendanceBatch(courseId, records) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const nowIso = new Date().toISOString();
+      records.forEach((rec) => {
+        const periodNum = Number(rec.period_number || 1);
+        const idx = dbData.attendance.findIndex(
+          (a) =>
+            a.course_id === courseId &&
+            a.student_id === rec.student_id &&
+            a.session_date === rec.session_date &&
+            Number(a.period_number || 1) === periodNum
+        );
+        const row = {
+          ...rec,
+          course_id: courseId,
+          period_number: periodNum,
+          id:
+            idx >= 0
+              ? dbData.attendance[idx].id
+              : rec.id || `${courseId}__${rec.student_id}__${rec.session_date}__${periodNum}`,
+          updated_at: nowIso,
+        };
+        if (idx >= 0) dbData.attendance[idx] = row;
+        else dbData.attendance.push(row);
+      });
+      saveDemoDb(dbData);
+      return dbData.attendance
+        .filter((a) => a.course_id === courseId)
+        .sort((a, b) =>
+          String(a.session_date).localeCompare(String(b.session_date)) ||
+          Number(a.period_number || 1) - Number(b.period_number || 1)
+        );
+    }
+    const res = await apiRequest('/api/courses', {
+      method: 'POST',
+      body: { action: 'save_attendance', courseId, records },
+    });
+    return res.attendance || [];
+  },
+
+  async deleteAttendanceSession(courseId, sessionDate, periodNumber) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const targetPeriod = Number(periodNumber || 1);
+      dbData.attendance = dbData.attendance.filter(
+        (a) =>
+          !(
+            a.course_id === courseId &&
+            a.session_date === sessionDate &&
+            Number(a.period_number || 1) === targetPeriod
+          )
+      );
+      saveDemoDb(dbData);
+      return dbData.attendance.filter((a) => a.course_id === courseId);
+    }
+    const res = await apiRequest('/api/courses', {
+      method: 'POST',
+      body: { action: 'delete_attendance', courseId, sessionDate, periodNumber },
+    });
+    return res.attendance || [];
   },
 
   async saveStudentScoresBatch(courseId, rows) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.studentScores[courseId] = rows.map((r) => ({ ...r, course_id: courseId }));
-      saveDemoDb(db);
-      return db.studentScores[courseId];
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const nowIso = new Date().toISOString();
+      rows.forEach((row) => {
+        const idx = dbData.studentScores.findIndex(
+          (r) => r.course_id === courseId && r.student_id === row.student_id
+        );
+        const saved = {
+          ...row,
+          course_id: courseId,
+          id: idx >= 0 ? dbData.studentScores[idx].id : row.id || `${courseId}__${row.student_id}`,
+          updated_at: nowIso,
+        };
+        if (idx >= 0) dbData.studentScores[idx] = saved;
+        else dbData.studentScores.push(saved);
+      });
+      saveDemoDb(dbData);
+      return dbData.studentScores.filter((r) => r.course_id === courseId);
     }
-    const payload = rows.map((r) => ({ ...r, course_id: courseId }));
-    const { error } = await supabase
-      .from('student_scores')
-      .upsert(payload, { onConflict: 'course_id,student_id' });
-    if (error) throw error;
-    const { data } = await supabase.from('student_scores').select('*').eq('course_id', courseId);
-    return data || [];
+    const res = await apiRequest('/api/courses', {
+      method: 'POST',
+      body: { action: 'save_scores', courseId, rows },
+    });
+    return res.studentScores || [];
   },
 
   async saveCharacteristicsBatch(courseId, rows) {
-    if (!isSchemaReadyForLive()) {
-      const db = loadDemoDb();
-      db.characteristicsScores[courseId] = rows.map((r) => ({ ...r, course_id: courseId }));
-      saveDemoDb(db);
-      return db.characteristicsScores[courseId];
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const nowIso = new Date().toISOString();
+      rows.forEach((row) => {
+        const idx = dbData.characteristicsScores.findIndex(
+          (r) => r.course_id === courseId && r.student_id === row.student_id
+        );
+        const saved = {
+          ...row,
+          course_id: courseId,
+          id: idx >= 0 ? dbData.characteristicsScores[idx].id : row.id || `${courseId}__${row.student_id}`,
+          updated_at: nowIso,
+        };
+        if (idx >= 0) dbData.characteristicsScores[idx] = saved;
+        else dbData.characteristicsScores.push(saved);
+      });
+      saveDemoDb(dbData);
+      return dbData.characteristicsScores.filter((r) => r.course_id === courseId);
     }
-    const payload = rows.map((r) => ({ ...r, course_id: courseId }));
-    const { error } = await supabase
-      .from('characteristics_scores')
-      .upsert(payload, { onConflict: 'course_id,student_id' });
-    if (error) throw error;
-    const { data } = await supabase.from('characteristics_scores').select('*').eq('course_id', courseId);
-    return data || [];
+    const res = await apiRequest('/api/courses', {
+      method: 'POST',
+      body: { action: 'save_characteristics', courseId, rows },
+    });
+    return res.characteristicsScores || [];
+  },
+
+  async fetchPrimary2568Assessments(gradeLevel, classroom) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      return (dbData.primary2568Assessments || []).filter(
+        (r) =>
+          (!gradeLevel || r.grade_level === gradeLevel) &&
+          (!classroom || String(r.classroom || '1') === String(classroom))
+      );
+    }
+    const params = new URLSearchParams();
+    if (gradeLevel) params.set('gradeLevel', gradeLevel);
+    if (classroom) params.set('classroom', String(classroom));
+    const res = await apiRequest(`/api/classroom?${params.toString()}`);
+    return res.rows || [];
+  },
+
+  async savePrimary2568Batch(rows) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      if (!Array.isArray(dbData.primary2568Assessments)) {
+        dbData.primary2568Assessments = [];
+      }
+      const nowIso = new Date().toISOString();
+      rows.forEach((row) => {
+        const year = String(row.academic_year || '2569');
+        const sem = String(row.semester || '1');
+        const idx = dbData.primary2568Assessments.findIndex(
+          (r) =>
+            r.student_id === row.student_id &&
+            String(r.academic_year || '2569') === year &&
+            String(r.semester || '1') === sem
+        );
+        const saved = {
+          ...row,
+          id: idx >= 0 ? dbData.primary2568Assessments[idx].id : row.id || `${row.student_id}__${year}__${sem}`,
+          updated_at: nowIso,
+        };
+        if (idx >= 0) dbData.primary2568Assessments[idx] = saved;
+        else dbData.primary2568Assessments.push(saved);
+      });
+      saveDemoDb(dbData);
+      const first = rows[0];
+      return first
+        ? dbData.primary2568Assessments.filter(
+            (r) => r.grade_level === first.grade_level && String(r.classroom || '1') === String(first.classroom || '1')
+          )
+        : [];
+    }
+    const res = await apiRequest('/api/classroom', {
+      method: 'POST',
+      body: { action: 'save_primary2568_batch', rows },
+    });
+    return res.rows || [];
+  },
+
+  async saveClassroomSummary(summaryObj) {
+    if (!isBackendReadyForLive()) {
+      const dbData = loadDemoDb();
+      const idx = dbData.classroomSummaries.findIndex(
+        (s) =>
+          s.grade_level === summaryObj.grade_level &&
+          String(s.classroom || '1') === String(summaryObj.classroom || '1') &&
+          String(s.academic_year || '2569') === String(summaryObj.academic_year || '2569') &&
+          String(s.semester || '1') === String(summaryObj.semester || '1')
+      );
+      const saved = {
+        ...summaryObj,
+        id:
+          idx >= 0
+            ? dbData.classroomSummaries[idx].id
+            : summaryObj.id || `${summaryObj.grade_level}_${summaryObj.classroom}_${summaryObj.semester}`,
+        updated_at: new Date().toISOString(),
+      };
+      if (idx >= 0) dbData.classroomSummaries[idx] = saved;
+      else dbData.classroomSummaries.push(saved);
+      saveDemoDb(dbData);
+      return saved;
+    }
+    const res = await apiRequest('/api/classroom', {
+      method: 'POST',
+      body: { action: 'save_summary', summary: summaryObj },
+    });
+    return res.summary;
   },
 };

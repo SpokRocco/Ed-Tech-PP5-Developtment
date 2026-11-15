@@ -1,173 +1,323 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { DEMO_USERS } from '../data/demoSeedData';
 import {
-  supabase,
-  isSupabaseConfigured,
   getStoredRuntimeMode,
   setStoredRuntimeMode,
-} from '../lib/supabaseClient';
+} from '../lib/mediaUtils';
 import { dataService } from '../services/dataService';
-import { DEMO_USERS } from '../data/demoSeedData';
+
+const DEMO_SESSION_KEY = 'banhatkhet_pp5_demo_user_id';
+const DEMO_DB_KEY = 'banhatkhet_pp5_demo_db_v3';
 
 const AuthContext = createContext(null);
-const DEMO_AUTH_KEY = 'banhatkhet_demo_user_id';
+
+function getDemoUsersList() {
+  try {
+    const raw = localStorage.getItem(DEMO_DB_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.users) && parsed.users.length > 0) {
+        return parsed.users;
+      }
+    }
+  } catch {
+    // ignore storage read error
+  }
+  return DEMO_USERS;
+}
+
+async function authApiCall(payload) {
+  const res = await fetch('/api/auth', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+  if (!res.ok) {
+    throw new Error(data?.error || data?.message || `คำขอยืนยันตัวตนไม่สำเร็จ (${res.status})`);
+  }
+  return data;
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [authNotice, setAuthNotice] = useState('');
-  const [runtimeMode, setRuntimeModeState] = useState(getStoredRuntimeMode);
-  const [schemaReady, setSchemaReady] = useState(false);
+  const [backendConfigured, setBackendConfiguredState] = useState(false);
+  const [backendReady, setBackendReady] = useState(false);
+  const [userCount, setUserCount] = useState(0);
+  const [runtimeMode, setRuntimeModeState] = useState('demo');
 
-  const loadSupabaseProfile = useCallback(async (authUser) => {
-    if (!authUser || !supabase) return null;
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .or(`auth_user_id.eq.${authUser.id},email.eq.${authUser.email}`)
-      .maybeSingle();
+  const isLiveBackend = backendConfigured && backendReady && runtimeMode === 'live';
 
-    if (error) {
-      console.error('Failed to load profile:', error);
-      return null;
+  const restoreSessionForMode = useCallback(async (configured, schemaReady, mode) => {
+    if (configured && schemaReady && mode === 'live') {
+      const res = await fetch('/api/auth', { credentials: 'include' });
+      const data = await res.json();
+      if (typeof data?.userCount === 'number') {
+        setUserCount(data.userCount);
+      }
+      setUser(data?.user || null);
+      return;
     }
-    return data;
-  }, []);
 
-  const isLiveSupabase = isSupabaseConfigured && schemaReady && runtimeMode === 'live';
+    try {
+      const savedId = localStorage.getItem(DEMO_SESSION_KEY);
+      if (savedId) {
+        const found = getDemoUsersList().find((u) => u.id === savedId && u.is_active !== false);
+        setUser(found || null);
+        return;
+      }
+    } catch {
+      // ignore storage restriction
+    }
+    setUser(null);
+  }, []);
 
   useEffect(() => {
     let active = true;
-    let subscription = null;
-
-    async function init() {
-      const probe = await dataService.probeSupabaseSchema();
-      if (!active) return;
-      setSchemaReady(probe.schemaReady);
-
-      const useLive = probe.schemaReady && getStoredRuntimeMode() === 'live';
-
-      if (!useLive || !supabase) {
-        const savedId = localStorage.getItem(DEMO_AUTH_KEY);
-        if (savedId) {
-          const found = DEMO_USERS.find((u) => u.id === savedId) || null;
-          if (active) setUser(found);
-        }
-        if (active) setLoading(false);
-        return;
-      }
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user && active) {
-        const profile = await loadSupabaseProfile(session.user);
-        setUser(profile);
-      }
-      if (active) setLoading(false);
-
-      const { data: listener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+    (async () => {
+      try {
+        const probe = await dataService.probeBackend();
         if (!active) return;
-        if (nextSession?.user) {
-          const profile = await loadSupabaseProfile(nextSession.user);
-          setUser(profile);
-        } else {
-          setUser(null);
+        const configured = Boolean(probe?.configured);
+        const schemaReady = Boolean(probe?.schemaReady);
+        setBackendConfiguredState(configured);
+        setBackendReady(schemaReady);
+        if (typeof probe?.userCount === 'number') {
+          setUserCount(probe.userCount);
         }
-      });
-      subscription = listener?.subscription;
-    }
 
-    init();
+        const mode = getStoredRuntimeMode();
+        setRuntimeModeState(mode);
+
+        if (configured && !schemaReady) {
+          setAuthError(
+            `เชื่อมต่อ Turso ไม่สำเร็จ (${probe?.reason || 'db_error'}) ระบบเปิดโหมดสาธิตให้ใช้งานชั่วคราว`
+          );
+        }
+
+        await restoreSessionForMode(configured, schemaReady, mode);
+      } catch (err) {
+        if (!active) return;
+        console.error('[useAuth] init error:', err);
+        setBackendConfiguredState(false);
+        setBackendReady(false);
+        setRuntimeModeState('demo');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
     return () => {
       active = false;
-      subscription?.unsubscribe?.();
     };
-  }, [loadSupabaseProfile, runtimeMode]);
+  }, [restoreSessionForMode]);
 
-  const switchRuntimeMode = (mode) => {
+  const clearAuthFeedback = useCallback(() => {
     setAuthError('');
     setAuthNotice('');
-    setStoredRuntimeMode(mode);
-    setRuntimeModeState(mode);
-    setUser(null);
-  };
+  }, []);
 
-  const loginWithEmail = async (email, password) => {
-    setAuthError('');
-    setAuthNotice('');
-    if (!isLiveSupabase || !supabase) {
-      const found = DEMO_USERS.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (!found) {
-        const msg = 'ไม่พบบัญชีผู้ใช้งานนี้ในระบบ Demo (กรุณาเลือกปุ่มเข้าสู่ระบบด่วนด้านล่าง)';
-        setAuthError(msg);
-        return { error: msg };
+  const loginWithEmail = useCallback(
+    async (emailOrObj, passwordArg) => {
+      setAuthError('');
+      setAuthNotice('');
+      const email =
+        typeof emailOrObj === 'object' ? emailOrObj?.email : emailOrObj;
+      const password =
+        typeof emailOrObj === 'object' ? emailOrObj?.password : passwordArg;
+      const emailLower = String(email || '').trim().toLowerCase();
+
+      if (!isLiveBackend) {
+        const found = getDemoUsersList().find(
+          (u) => String(u.email || '').trim().toLowerCase() === emailLower && u.is_active !== false
+        );
+        if (!found) {
+          const msg = 'ไม่พบบัญชีผู้ใช้งานนี้ในระบบสาธิต (กรุณากดเข้าสู่ระบบด่วนตามบทบาท หรือใช้อีเมลครูตัวอย่าง)';
+          setAuthError(msg);
+          return { user: null, error: msg };
+        }
+        try {
+          localStorage.setItem(DEMO_SESSION_KEY, found.id);
+        } catch {
+          // ignore
+        }
+        setUser(found);
+        return { user: found, error: null };
       }
-      localStorage.setItem(DEMO_AUTH_KEY, found.id);
-      setUser(found);
-      return { user: found, error: null };
-    }
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setAuthError(error.message);
-      return { error: error.message };
-    }
-    const profile = await loadSupabaseProfile(data.user);
-    if (!profile) {
-      const msg = 'ไม่พบข้อมูลบทบาทผู้ใช้งานในตาราง users กรุณาติดต่อผู้ดูแลระบบ';
-      setAuthError(msg);
-      return { error: msg };
-    }
-    setUser(profile);
-    return { user: profile, error: null };
-  };
+      try {
+        const data = await authApiCall({ action: 'login', email: emailLower, password });
+        setUser(data.user);
+        return { user: data.user, error: null };
+      } catch (err) {
+        setAuthError(err.message);
+        return { user: null, error: err.message };
+      }
+    },
+    [isLiveBackend]
+  );
 
-  const signUpWithEmail = async ({ email, password, fullName }) => {
+  const activateAccount = useCallback(
+    async (emailOrObj, passwordArg, fullNameArg = '') => {
+      setAuthError('');
+      setAuthNotice('');
+      const email =
+        typeof emailOrObj === 'object' ? emailOrObj?.email : emailOrObj;
+      const password =
+        typeof emailOrObj === 'object' ? emailOrObj?.password : passwordArg;
+      const fullName =
+        typeof emailOrObj === 'object' ? emailOrObj?.fullName || '' : fullNameArg;
+
+      if (!isLiveBackend) {
+        const msg = 'การเปิดใช้งานบัญชีจริงรองรับเฉพาะเมื่อเชื่อมต่อฐานข้อมูล Turso SQL Live แล้ว';
+        setAuthError(msg);
+        return { user: null, error: msg };
+      }
+      try {
+        const data = await authApiCall({
+          action: 'activate',
+          email: String(email || '').trim().toLowerCase(),
+          password,
+          fullName,
+        });
+        setUser(data.user);
+        setAuthNotice('เปิดใช้งานบัญชีและเข้าสู่ระบบเรียบร้อยแล้ว');
+        return { user: data.user, error: null };
+      } catch (err) {
+        setAuthError(err.message);
+        return { user: null, error: err.message };
+      }
+    },
+    [isLiveBackend]
+  );
+
+  const setupFirstAdmin = useCallback(
+    async (emailOrObj, passwordArg, fullNameArg = '') => {
+      setAuthError('');
+      setAuthNotice('');
+      const email =
+        typeof emailOrObj === 'object' ? emailOrObj?.email : emailOrObj;
+      const password =
+        typeof emailOrObj === 'object' ? emailOrObj?.password : passwordArg;
+      const fullName =
+        typeof emailOrObj === 'object' ? emailOrObj?.fullName || '' : fullNameArg;
+
+      if (!isLiveBackend) {
+        const msg = 'สร้างบัญชี Admin คนแรกได้เฉพาะเมื่อเชื่อมต่อฐานข้อมูล Turso SQL Live แล้ว';
+        setAuthError(msg);
+        return { user: null, error: msg };
+      }
+      try {
+        const data = await authApiCall({
+          action: 'setup_first_admin',
+          email: String(email || '').trim().toLowerCase(),
+          password,
+          fullName,
+        });
+        setUser(data.user);
+        setUserCount((prev) => Math.max(prev, 1));
+        setAuthNotice('สร้างบัญชีผู้ดูแลระบบคนแรกเรียบร้อย สามารถเข้าหน้า Admin เพื่อติดตั้งข้อมูลตั้งต้นได้ทันที');
+        return { user: data.user, error: null };
+      } catch (err) {
+        setAuthError(err.message);
+        return { user: null, error: err.message };
+      }
+    },
+    [isLiveBackend]
+  );
+
+  const changePassword = useCallback(
+    async (currentPassword, newPassword) => {
+      setAuthError('');
+      setAuthNotice('');
+      if (!isLiveBackend) {
+        const msg = 'เปลี่ยนรหัสผ่านได้เฉพาะในโหมด Turso SQL Live';
+        setAuthError(msg);
+        throw new Error(msg);
+      }
+      try {
+        await authApiCall({ action: 'change_password', currentPassword, newPassword });
+        setAuthNotice('เปลี่ยนรหัสผ่านเรียบร้อยแล้ว');
+        return { ok: true };
+      } catch (err) {
+        setAuthError(err.message);
+        throw err;
+      }
+    },
+    [isLiveBackend]
+  );
+
+  const resetPassword = useCallback(async () => {
+    setAuthError('');
+    setAuthNotice(
+      'หากลืมรหัสผ่าน กรุณาติดต่อผู้ดูแลระบบ (Admin) เพื่อกำหนดรหัสผ่านใหม่ในเมนู จัดการระบบ (/admin)'
+    );
+  }, []);
+
+  const loginDemoRole = useCallback(async (roleOrUser) => {
     setAuthError('');
     setAuthNotice('');
-    if (!isLiveSupabase || !supabase) {
-      const msg = 'การสมัครเปิดบัญชีจริงต้องเชื่อมต่อฐานข้อมูล Supabase (ที่รัน SUPABASE_SETUP.sql แล้ว)';
-      setAuthError(msg);
-      return { error: msg };
+    const users = getDemoUsersList();
+    const targetId = typeof roleOrUser === 'object' ? roleOrUser?.id : null;
+    const targetRole = typeof roleOrUser === 'object' ? roleOrUser?.role : roleOrUser;
+    const found = users.find(
+      (u) => ((targetId && u.id === targetId) || (targetRole && u.role === targetRole)) && u.is_active !== false
+    );
+    if (!found) {
+      throw new Error('ไม่พบบัญชีตัวอย่างสำหรับบทบาทที่เลือก');
     }
-    const { data, error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: {
-        data: { full_name: fullName?.trim() || '' },
-      },
-    });
-    if (error) {
-      setAuthError(error.message);
-      return { error: error.message };
+    try {
+      localStorage.setItem(DEMO_SESSION_KEY, found.id);
+    } catch {
+      // ignore
     }
-    if (data.session) {
-      const profile = await loadSupabaseProfile(data.user);
-      setUser(profile);
-      return { user: profile, error: null };
-    }
-    const notice = 'ส่งคำขอยืนยันอีเมลเรียบร้อยแล้ว กรุณายืนยันอีเมลแล้วเข้าสู่ระบบ';
-    setAuthNotice(notice);
-    return { notice, error: null };
-  };
+    setUser(found);
+    return found;
+  }, []);
 
-  const loginDemoRole = (demoUser) => {
+  const logout = useCallback(async () => {
     setAuthError('');
     setAuthNotice('');
-    setStoredRuntimeMode('demo');
-    setRuntimeModeState('demo');
-    localStorage.setItem(DEMO_AUTH_KEY, demoUser.id);
-    setUser(demoUser);
-  };
-
-  const logout = async () => {
-    setAuthError('');
-    setAuthNotice('');
-    localStorage.removeItem(DEMO_AUTH_KEY);
-    if (isLiveSupabase && supabase) {
-      await supabase.auth.signOut();
+    try {
+      localStorage.removeItem(DEMO_SESSION_KEY);
+    } catch {
+      // ignore
+    }
+    if (isLiveBackend) {
+      try {
+        await authApiCall({ action: 'logout' });
+      } catch (err) {
+        console.warn('[useAuth] logout warning:', err);
+      }
     }
     setUser(null);
-  };
+  }, [isLiveBackend]);
+
+  const switchRuntimeMode = useCallback(
+    async (nextMode) => {
+      setAuthError('');
+      setAuthNotice('');
+      const normalized = nextMode === 'live' && backendReady ? 'live' : 'demo';
+      setStoredRuntimeMode(normalized);
+      setRuntimeModeState(normalized);
+      try {
+        localStorage.removeItem(DEMO_SESSION_KEY);
+      } catch {
+        // ignore
+      }
+      await restoreSessionForMode(backendConfigured, backendReady, normalized);
+    },
+    [backendConfigured, backendReady, restoreSessionForMode]
+  );
 
   return (
     <AuthContext.Provider
@@ -176,15 +326,21 @@ export function AuthProvider({ children }) {
         loading,
         authError,
         authNotice,
-        isLiveSupabase,
-        isSupabaseConfigured,
-        schemaReady,
+        isLiveBackend,
+        isBackendConfigured: backendConfigured,
+        backendReady,
+        userCount,
         runtimeMode,
-        switchRuntimeMode,
         loginWithEmail,
-        signUpWithEmail,
+        activateAccount,
+        signUpWithEmail: activateAccount,
+        setupFirstAdmin,
+        changePassword,
+        resetPassword,
         loginDemoRole,
         logout,
+        switchRuntimeMode,
+        clearAuthFeedback,
       }}
     >
       {children}

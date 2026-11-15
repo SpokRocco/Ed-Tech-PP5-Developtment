@@ -14,7 +14,7 @@ export const DEMO_SYSTEM_SETTINGS = {
   director_title: 'ผู้อำนวยการโรงเรียนบ้านหาดเค็ด',
   academic_head_name: 'นายปิยะพันธุ์ ขันไร่',
   registrar_name: 'นายปิยะพันธุ์ ขันไร่',
-  logo_url: 'https://fhfckuypfstlokashcmu.supabase.co/storage/v1/object/public/images/school_logo/1793976024904_by8r2q.webp',
+  logo_url: '/school-logo.webp',
   emblem_url: '',
   director_signature_url: '',
   cover_config: {

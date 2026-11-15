@@ -17,20 +17,23 @@ import {
   PlugZap,
 } from 'lucide-react';
 import { useSchoolData } from '../hooks/useSchoolData';
+import { useAuth } from '../hooks/useAuth';
 import { useSubjectImport } from '../hooks/useSubjectImport';
-import { uploadSchoolImage } from '../lib/supabaseClient';
+import { compressImageToDataUrl } from '../lib/mediaUtils';
 import { parseStudentsFile, downloadStudentTemplate } from '../services/studentImportExport';
 import { exportCurriculumStructureToExcel } from '../services/subjectImportAdapter';
 import { getOfficialSchoolCurriculumCatalog } from '../data/schoolCurriculumCatalog';
 import { GRADE_LEVELS, LEARNING_AREAS, getFullStudentName, inferSubjectType } from '../lib/thaiFormatting';
 
 export function AdminDashboard() {
+  const { isLiveBackend } = useAuth();
   const {
     settings,
     users,
     students,
     subjects,
     indicators,
+    schemaMeta,
     updateSettings,
     saveUser,
     deleteUser,
@@ -39,11 +42,13 @@ export function AdminDashboard() {
     upsertSubjects,
     deleteSubject,
     upsertIndicator,
+    seedDatabase,
     resetDemo,
   } = useSchoolData();
 
   const [activeTab, setActiveTab] = useState('settings');
   const [statusMsg, setStatusMsg] = useState('');
+  const [seedingLive, setSeedingLive] = useState(false);
 
   // Tab 1: System Settings State
   const [settingsForm, setSettingsForm] = useState(settings);
@@ -53,6 +58,7 @@ export function AdminDashboard() {
   const [newUser, setNewUser] = useState({
     full_name: '',
     email: '',
+    initial_password: '',
     position: 'ครู',
     academic_standing: '',
     role: 'teacher',
@@ -119,14 +125,14 @@ export function AdminDashboard() {
     if (!file) return;
     setUploadingAsset(field);
     try {
-      const res = await uploadSchoolImage(file, field);
+      const res = await compressImageToDataUrl(file, field);
       if (res.error) {
-        notify(`อัปโหลดไม่สำเร็จ: ${res.error}`);
+        notify(`บันทึกภาพไม่สำเร็จ: ${res.error}`);
       } else {
         const next = { ...settingsForm, [field]: res.url };
         setSettingsForm(next);
         await updateSettings({ [field]: res.url });
-        notify('อัปโหลดรูปภาพเข้าสู่ school-images และบันทึกเรียบร้อย');
+        notify('บีบอัดและบันทึกไฟล์ภาพเข้าสู่ระบบเรียบร้อย');
       }
     } finally {
       setUploadingAsset('');
@@ -142,16 +148,36 @@ export function AdminDashboard() {
   const handleAddUser = async (e) => {
     e.preventDefault();
     if (!newUser.full_name || !newUser.email) return;
-    await saveUser({ ...newUser, is_active: true });
+    const saved = await saveUser({ ...newUser, is_active: true });
+    const hadPassword = Boolean(newUser.initial_password?.trim());
     setNewUser({
       full_name: '',
       email: '',
+      initial_password: '',
       position: 'ครู',
       academic_standing: '',
       role: 'teacher',
       learning_area: 'ภาษาไทย',
     });
-    notify('บันทึกบัญชีผู้ใช้งานเรียบร้อย');
+    if (saved?.__authWarning) {
+      notify(`บันทึกสิทธิ์ใน Turso SQL แล้ว (คำเตือน: ${saved.__authWarning})`);
+    } else if (hadPassword && isLiveBackend) {
+      notify('บันทึกสิทธิ์และตั้งรหัสผ่านในฐานข้อมูล Turso SQL เรียบร้อย');
+    } else {
+      notify('บันทึกบัญชีผู้ใช้งานเรียบร้อย');
+    }
+  };
+
+  const handleSeedLiveDatabase = async () => {
+    setSeedingLive(true);
+    try {
+      await seedDatabase();
+      notify('ซิงค์ข้อมูลตั้งต้น (136 วิชา, นักเรียน, ตัวชี้วัด และ ปพ.5 ตัวอย่าง) เข้าสู่ Turso SQL สำเร็จ');
+    } catch (err) {
+      notify(`ซิงค์ข้อมูลไม่สำเร็จ: ${err?.message || 'ตรวจสอบสิทธิ์ Admin / การเชื่อมต่อ Turso'}`);
+    } finally {
+      setSeedingLive(false);
+    }
   };
 
   const handleAddStudent = async (e) => {
@@ -294,19 +320,38 @@ export function AdminDashboard() {
             ศูนย์จัดการฐานข้อมูลกลางและตั้งค่าระบบ ปพ.5
           </h2>
           <p className="text-xs sm:text-sm text-slate-200 mt-0.5">
-            จัดการข้อมูลโรงเรียน โลโก้ (`school-images`) บัญชีผู้ใช้ นักเรียนส่วนกลาง และรหัสวิชาจากไฟล์ Excel
+            จัดการข้อมูลโรงเรียน โลโก้ (Turso SQL Data URL) บัญชีผู้ใช้ นักเรียนส่วนกลาง และรหัสวิชาจากไฟล์ Excel
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            resetDemo();
-            notify('รีเซ็ตข้อมูลสาธิตกลับสู่ค่าเริ่มต้นแล้ว');
-          }}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-medium border border-white/20 self-start md:self-center"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> รีเซ็ตข้อมูลสาธิต
-        </button>
+        <div className="flex flex-wrap gap-2 self-start md:self-center">
+          {isLiveBackend && (
+            <button
+              type="button"
+              disabled={seedingLive}
+              onClick={handleSeedLiveDatabase}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gold-500/20 hover:bg-gold-500/30 text-gold-200 text-xs font-semibold border border-gold-400/40 disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${seedingLive ? 'animate-spin' : ''}`} />
+              {seedingLive
+                ? 'กำลังซิงค์เข้า Turso SQL...'
+                : schemaMeta?.isSeeded
+                ? 'เติมข้อมูลตั้งต้น/หลักสูตร (Turso SQL)'
+                : 'ติดตั้งข้อมูลตั้งต้นเข้า Turso SQL'}
+            </button>
+          )}
+          {!isLiveBackend && (
+            <button
+              type="button"
+              onClick={() => {
+                resetDemo();
+                notify('รีเซ็ตข้อมูลสาธิตกลับสู่ค่าเริ่มต้นแล้ว');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-medium border border-white/20"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> รีเซ็ตข้อมูลสาธิต
+            </button>
+          )}
+        </div>
       </div>
 
       {statusMsg && (
@@ -338,7 +383,7 @@ export function AdminDashboard() {
         })}
       </div>
 
-      {/* TAB 1: System Settings & Storage school-images */}
+      {/* TAB 1: System Settings & Compressed Image Data URLs */}
       {activeTab === 'settings' && (
         <form
           onSubmit={handleSaveSettings}
@@ -409,11 +454,11 @@ export function AdminDashboard() {
             </div>
           </div>
 
-          {/* Supabase Storage Upload Cards */}
+          {/* Compressed Image Upload Cards (Stored directly in Turso SQL - zero paid storage required) */}
           <div className="border-t border-ivory-200 pt-5">
             <h4 className="font-semibold text-navy-900 text-sm mb-3 flex items-center gap-2">
               <ImagePlus className="w-4 h-4 text-royal-600" />
-              จัดการไฟล์ภาพใน Supabase Storage Bucket (`school-images`)
+              จัดการไฟล์ภาพโลโก้ ตราครุฑ และลายเซ็น (บีบอัด Data URL เก็บใน Turso SQL)
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {[
@@ -515,6 +560,21 @@ export function AdminDashboard() {
                 ))}
               </select>
             </div>
+            {isLiveBackend && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  รหัสผ่านเริ่มต้น (ไม่บังคับ)
+                </label>
+                <input
+                  type="password"
+                  minLength={6}
+                  value={newUser.initial_password || ''}
+                  onChange={(e) => setNewUser({ ...newUser, initial_password: e.target.value })}
+                  placeholder="อย่างน้อย 6 ตัวอักษร"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm"
+                />
+              </div>
+            )}
             <button
               type="submit"
               className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-navy-800 hover:bg-navy-900 text-gold-300 text-sm font-semibold"

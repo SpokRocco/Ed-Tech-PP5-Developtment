@@ -1,10 +1,12 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { dataService, resetDemoDatabase } from '../services/dataService';
 import { DEMO_SYSTEM_SETTINGS } from '../data/demoSeedData';
+import { useAuth } from './useAuth';
 
 const SchoolDataContext = createContext(null);
 
 export function SchoolDataProvider({ children }) {
+  const { user, runtimeMode, backendReady } = useAuth();
   const [settings, setSettings] = useState(DEMO_SYSTEM_SETTINGS);
   const [users, setUsers] = useState([]);
   const [students, setStudents] = useState([]);
@@ -12,13 +14,18 @@ export function SchoolDataProvider({ children }) {
   const [indicators, setIndicators] = useState([]);
   const [courses, setCourses] = useState([]);
   const [classroomSummaries, setClassroomSummaries] = useState([]);
-  const [schemaMeta, setSchemaMeta] = useState({ configured: false, schemaReady: false, reason: '' });
+  const [schemaMeta, setSchemaMeta] = useState({
+    configured: false,
+    schemaReady: false,
+    isSeeded: false,
+    reason: '',
+  });
   const [loading, setLoading] = useState(true);
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await dataService.fetchBootstrapData();
+      const data = await dataService.fetchBootstrapData(user);
       setSettings(data.settings || DEMO_SYSTEM_SETTINGS);
       setUsers(data.users || []);
       setStudents(data.students || []);
@@ -32,11 +39,11 @@ export function SchoolDataProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, runtimeMode, backendReady]);
 
   const updateSettings = async (patch) => {
     const updated = await dataService.updateSystemSettings(patch);
@@ -108,6 +115,11 @@ export function SchoolDataProvider({ children }) {
     return saved;
   };
 
+  const seedDatabase = async () => {
+    await dataService.seedInitialDatabase(user);
+    await refreshAll();
+  };
+
   const resetDemo = async () => {
     resetDemoDatabase();
     await refreshAll();
@@ -137,6 +149,7 @@ export function SchoolDataProvider({ children }) {
         saveCourse,
         deleteCourse,
         saveClassroomSummary,
+        seedDatabase,
         resetDemo,
       }}
     >

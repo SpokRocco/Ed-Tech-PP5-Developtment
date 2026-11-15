@@ -8,7 +8,7 @@ const ROLE_LABELS = {
   teacher: { label: 'ครูผู้สอน', cls: 'bg-emerald-500/20 text-emerald-100 border-emerald-300/40' },
 };
 
-export function AppHeader({ settings, user, isLiveSupabase, onLogout }) {
+export function AppHeader({ settings, user, isLiveBackend, onLogout }) {
   const roleMeta = user ? ROLE_LABELS[user.role] || ROLE_LABELS.teacher : null;
 
   return (
@@ -30,13 +30,13 @@ export function AppHeader({ settings, user, isLiveSupabase, onLogout }) {
                 </h1>
                 <span
                   className={`inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full border ${
-                    isLiveSupabase
+                    isLiveBackend
                       ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40'
                       : 'bg-amber-500/20 text-amber-100 border-amber-300/40'
                   }`}
                 >
-                  {isLiveSupabase ? <Database className="w-3 h-3" /> : <Sparkles className="w-3 h-3" />}
-                  {isLiveSupabase ? 'Supabase Live' : 'โหมดสาธิตพร้อมใช้งาน'}
+                  {isLiveBackend ? <Database className="w-3 h-3" /> : <Sparkles className="w-3 h-3" />}
+                  {isLiveBackend ? 'Turso SQL Live' : 'โหมดสาธิตพร้อมใช้งาน'}
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-gold-200 font-medium mt-0.5">
