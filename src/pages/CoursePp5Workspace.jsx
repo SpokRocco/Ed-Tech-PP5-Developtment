@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   CalendarCheck,
@@ -12,10 +12,15 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useSchoolData } from '../hooks/useSchoolData';
+import { Pp5CourseHeaderPanel } from '../components/pp5/Pp5CourseHeaderPanel';
+import { Pp5ExtraReportsModal } from '../components/pp5/Pp5ExtraReportsModal';
+import { exportPp5ToDocx, exportPp5ToExcel } from '../services/exportEngine';
 import { dataService } from '../services/dataService';
 import {
   calculateStudentAttendance,
   computeStudentCourseScores,
+  computeCourseCompletion,
+  resolveCourseStudents,
   getFullStudentName,
 } from '../lib/thaiFormatting';
 import { StatusBadge } from '../components/common/StatusBadge';
@@ -29,7 +34,7 @@ import { ExportReportTab } from '../components/pp5/ExportReportTab';
 export function CoursePp5Workspace() {
   const { courseId } = useParams();
   const navigate = useNavigate();
-  const { settings, users, students, indicators, courses, saveCourse } = useSchoolData();
+  const { settings, users, students, indicators, courses, saveCourse, saveAcademicDocument } = useSchoolData();
 
   const course = useMemo(() => courses.find((c) => c.id === courseId) || null, [courses, courseId]);
   const teacher = useMemo(
@@ -45,6 +50,8 @@ export function CoursePp5Workspace() {
   const [characteristicsRows, setCharacteristicsRows] = useState([]);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [banner, setBanner] = useState('');
+  const [extraModalMode, setExtraModalMode] = useState(null);
+  const [pp6DraftUrl, setPp6DraftUrl] = useState('');
 
   useEffect(() => {
     if (!courseId) return;
@@ -67,13 +74,10 @@ export function CoursePp5Workspace() {
     };
   }, [courseId]);
 
-  const courseStudents = useMemo(() => {
-    if (!course) return [];
-    const ids = new Set(course.student_ids || []);
-    return students
-      .filter((s) => ids.has(s.id))
-      .sort((a, b) => (a.student_number || 0) - (b.student_number || 0));
-  }, [course, students]);
+  const courseStudents = useMemo(
+    () => resolveCourseStudents(course, students),
+    [course, students]
+  );
 
   const courseIndicators = useMemo(() => {
     if (!course) return [];
@@ -95,14 +99,19 @@ export function CoursePp5Workspace() {
     const map = {};
     courseStudents.forEach((stu) => {
       const row = studentScores.find((r) => r.student_id === stu.id) || { unit_scores: {} };
-      const computed = computeStudentCourseScores(row, scoreStructure, attendanceStatsMap[stu.id]);
+      const computed = computeStudentCourseScores(
+        row,
+        scoreStructure,
+        attendanceStatsMap[stu.id],
+        course?.total_hours || 40
+      );
       map[stu.id] = {
         ...computed,
         unitScores: row.unit_scores || {},
       };
     });
     return map;
-  }, [courseStudents, studentScores, scoreStructure, attendanceStatsMap]);
+  }, [courseStudents, studentScores, scoreStructure, attendanceStatsMap, course?.total_hours]);
 
   const characteristicsMap = useMemo(() => {
     const map = {};
@@ -111,6 +120,220 @@ export function CoursePp5Workspace() {
     });
     return map;
   }, [characteristicsRows]);
+
+  const completion = useMemo(
+    () =>
+      computeCourseCompletion(course, {
+        students: courseStudents,
+        scoreStructure,
+        studentScores,
+        attendanceRecords,
+        characteristicsRows,
+      }),
+    [course, courseStudents, scoreStructure, studentScores, attendanceRecords, characteristicsRows]
+  );
+
+  const handleSaveCourseConfig = async (cfg) => {
+    await saveCourse({
+      ...course,
+      academic_year: cfg.academic_year,
+      semester: cfg.semester,
+      grade_level: cfg.grade_level,
+      classroom: cfg.classroom,
+      subject_name: cfg.subject_name,
+      subject_code: cfg.subject_code,
+      credits: cfg.credits,
+      total_hours: cfg.total_hours,
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        courseMetaOverrides: cfg.courseMetaOverrides,
+      },
+    });
+    const nextStruct = {
+      ...(scoreStructure || { course_id: course.id, units: [], grading_policy: {} }),
+      formative_ratio: cfg.ratios.formative_ratio,
+      midterm_ratio: cfg.ratios.midterm_ratio,
+      final_ratio: cfg.ratios.final_ratio,
+    };
+    const savedStruct = await dataService.saveScoreStructure(course.id, nextStruct);
+    setScoreStructure(savedStruct);
+    setPp6DraftUrl('');
+    setBanner('บันทึกข้อมูลรายวิชา สัดส่วนคะแนน และการตั้งค่าปกเรียบร้อยแล้ว');
+  };
+
+  const handleChangeStructureImmediate = async (patch) => {
+    const prevPolicy = scoreStructure?.grading_policy || {};
+    const nextStruct = {
+      ...(scoreStructure || { course_id: course.id, formative_ratio: 60, midterm_ratio: 20, final_ratio: 20, units: [] }),
+      ...(patch.formative_ratio !== undefined ? { formative_ratio: patch.formative_ratio } : {}),
+      ...(patch.midterm_ratio !== undefined ? { midterm_ratio: patch.midterm_ratio } : {}),
+      ...(patch.final_ratio !== undefined ? { final_ratio: patch.final_ratio } : {}),
+      grading_policy: {
+        ...prevPolicy,
+        ...(patch.decisionPeriod !== undefined ? { decisionPeriod: patch.decisionPeriod } : {}),
+        ...(patch.roundingMode !== undefined ? { roundingMode: patch.roundingMode } : {}),
+      },
+    };
+    const savedStruct = await dataService.saveScoreStructure(course.id, nextStruct);
+    setScoreStructure(savedStruct);
+    if (patch.roundingMode) {
+      const updatedRows = courseStudents.map((stu) => {
+        const existing = studentScores.find((r) => r.student_id === stu.id) || { unit_scores: {} };
+        const computed = computeStudentCourseScores(
+          existing,
+          savedStruct,
+          attendanceStatsMap[stu.id],
+          course?.total_hours || 40
+        );
+        return {
+          course_id: course.id,
+          student_id: stu.id,
+          unit_scores: existing.unit_scores || {},
+          formative_total: computed.formativeTotal,
+          midterm_score: computed.midtermTotal,
+          final_score: computed.finalTotal,
+          total_score: computed.totalScore,
+          grade: computed.grade,
+          special_status: existing.special_status || null,
+        };
+      });
+      if (updatedRows.length > 0) {
+        const savedRows = await dataService.saveStudentScoresBatch(course.id, updatedRows);
+        setStudentScores(savedRows);
+      }
+    }
+    setBanner('อัปเดตเกณฑ์การวัดผลและคำนวณเกรดใหม่เรียบร้อยแล้ว');
+  };
+
+  const handleLoadSampleCourseData = async ({ gradeLevel, classroom, structureMode }) => {
+    const targetRoomStudents = students.filter(
+      (s) =>
+        s.status === 'active' &&
+        s.grade_level === gradeLevel &&
+        String(s.classroom || '1') === String(classroom || '1')
+    );
+    const activeRoster = courseStudents.length > 0 ? courseStudents : targetRoomStudents.slice(0, 10);
+    if (!activeRoster.length) {
+      setBanner('ไม่พบรายชื่อนักเรียนสำหรับสร้างข้อมูลตัวอย่าง กรุณาวางรายชื่อก่อน');
+      return;
+    }
+
+    const nextStruct = {
+      ...(scoreStructure || { course_id: course.id, units: [], grading_policy: {} }),
+      formative_ratio: structureMode.formative,
+      midterm_ratio: structureMode.midterm,
+      final_ratio: structureMode.final,
+    };
+    const savedStruct = await dataService.saveScoreStructure(course.id, nextStruct);
+    setScoreStructure(savedStruct);
+
+    const planHours = Number(course.total_hours || 40);
+    const sampleRows = activeRoster.map((stu, idx) => {
+      const seedOffset = (idx * 3) % 14;
+      const i1 = Math.max(8, Math.min(15, 11 + ((idx + 1) % 4)));
+      const i2 = Math.max(8, Math.min(15, 10 + ((idx + 2) % 5)));
+      const i3 = Math.max(8, Math.min(15, 11 + (idx % 4)));
+      const i4 = Math.max(8, Math.min(15, 12 + ((idx + 3) % 4)));
+      const fVal = Math.min(structureMode.formative, Math.round(((i1 + i2 + i3 + i4) / 60) * structureMode.formative));
+      const mVal = Math.min(structureMode.midterm, Math.max(10, structureMode.midterm - (seedOffset % 7)));
+      const fnVal = Math.min(structureMode.final, Math.max(10, structureMode.final - ((seedOffset + 2) % 8)));
+
+      const draft = {
+        student_id: stu.id,
+        unit_scores: {
+          indicatorScores: { ind_1: i1, ind_2: i2, ind_3: i3, ind_4: i4 },
+          __directFormative: fVal,
+          __directMidterm: mVal,
+          __directFinal: fnVal,
+          __manualAttendanceHours: planHours,
+        },
+        special_status: null,
+      };
+      const computed = computeStudentCourseScores(
+        draft,
+        savedStruct,
+        attendanceStatsMap[stu.id],
+        planHours
+      );
+      return {
+        course_id: course.id,
+        student_id: stu.id,
+        unit_scores: draft.unit_scores,
+        formative_total: computed.formativeTotal,
+        midterm_score: computed.midtermTotal,
+        final_score: computed.finalTotal,
+        total_score: computed.totalScore,
+        grade: computed.grade,
+        special_status: null,
+      };
+    });
+
+    if (!(course.student_ids || []).length && activeRoster.length > 0) {
+      await saveCourse({
+        ...course,
+        student_ids: activeRoster.map((s) => s.id),
+      });
+    }
+    const savedScores = await dataService.saveStudentScoresBatch(course.id, sampleRows);
+    setStudentScores(savedScores);
+    setActiveTab('scores');
+    setBanner(`โหลดข้อมูลตัวอย่าง (${activeRoster.length} คน) เรียบร้อยแล้ว`);
+  };
+
+  const handleCreatePp6Draft = async () => {
+    const savedDoc = await saveAcademicDocument({
+      id: `pp6-${course.grade_level}-${course.classroom}-${course.academic_year}-${course.semester}`.replace(/[^\wก-๙-]/g, '_'),
+      doc_type: 'pp6_report',
+      title: `ปพ.6 สมุดรายงานผลรายบุคคล ${course.grade_level}/${course.classroom} ภาค ${course.semester}/${course.academic_year}`,
+      grade_level: course.grade_level,
+      classroom: String(course.classroom || '1'),
+      academic_year: String(course.academic_year || '2569'),
+      semester: String(course.semester || '1'),
+      completion_pct: 60,
+      status: 'draft',
+      payload: { sourceCourseId: course.id },
+    });
+    setPp6DraftUrl(`/documents/pp6_report/${savedDoc.id}`);
+    setBanner(`สร้างร่างเอกสาร ปพ.6 สำหรับชั้น ${course.grade_level}/${course.classroom} (${courseStudents.length} คน) เรียบร้อยแล้ว`);
+  };
+
+  const handleApplyMergedAnnualScores = async (mergedRows) => {
+    const nextStruct = {
+      ...(scoreStructure || { course_id: course.id, formative_ratio: 100, midterm_ratio: 0, final_ratio: 0, units: [] }),
+      formative_ratio: 100,
+      midterm_ratio: 0,
+      final_ratio: 0,
+      grading_policy: {
+        ...(scoreStructure?.grading_policy || {}),
+        decisionPeriod: 'year',
+      },
+    };
+    const savedStruct = await dataService.saveScoreStructure(course.id, nextStruct);
+    setScoreStructure(savedStruct);
+
+    const payload = mergedRows.map((m) => {
+      const prev = studentScores.find((r) => r.student_id === m.student_id) || {};
+      return {
+        course_id: course.id,
+        student_id: m.student_id,
+        unit_scores: {
+          ...(prev.unit_scores || {}),
+          __directFormative: m.annualScore,
+          __directMidterm: 0,
+          __directFinal: 0,
+        },
+        formative_total: m.annualScore,
+        midterm_score: 0,
+        final_score: 0,
+        total_score: m.annualScore,
+        grade: m.annualGrade,
+        special_status: m.special_status || null,
+      };
+    });
+    const savedScores = await dataService.saveStudentScoresBatch(course.id, payload);
+    setStudentScores(savedScores);
+    setBanner('รวมคะแนน ปพ.5 ภาคเรียนที่ 1 + ภาคเรียนที่ 2 เป็นผลรายปีเรียบร้อยแล้ว');
+  };
 
   if (!course) {
     return (
@@ -197,10 +420,63 @@ export function CoursePp5Workspace() {
       </div>
 
       {banner && (
-        <div className="no-print px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4" /> {banner}
+        <div className="no-print px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex flex-wrap items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" /> {banner}
+          </span>
+          {pp6DraftUrl && (
+            <Link
+              to={pp6DraftUrl}
+              className="px-3 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold"
+            >
+              เปิดดูร่าง ปพ.6 →
+            </Link>
+          )}
         </div>
       )}
+
+      {/* Enhanced Header Panel: Progress, PDPA, Sample Loader, 15-Field Metadata/Ratio & Download Bar */}
+      <Pp5CourseHeaderPanel
+        course={course}
+        settings={settings}
+        teacher={teacher}
+        completion={completion}
+        scoreStructure={scoreStructure}
+        studentCount={courseStudents.length}
+        onJumpToMissingItem={(tabId) => setActiveTab(tabId)}
+        onSaveCourseConfig={handleSaveCourseConfig}
+        onChangeStructureImmediate={handleChangeStructureImmediate}
+        onLoadSampleCourseData={handleLoadSampleCourseData}
+        onExportWord={() =>
+          exportPp5ToDocx({
+            course,
+            teacher,
+            settings,
+            students: courseStudents,
+            indicators: courseIndicators,
+            scoreStructure,
+            computedScoresMap,
+            attendanceStatsMap,
+            characteristicsMap,
+          })
+        }
+        onExportExcel={() =>
+          exportPp5ToExcel({
+            course,
+            teacher,
+            settings,
+            students: courseStudents,
+            indicators: courseIndicators,
+            attendanceRecords,
+            scoreStructure,
+            computedScoresMap,
+            attendanceStatsMap,
+            characteristicsMap,
+          })
+        }
+        onOpenRankedModal={() => setExtraModalMode('ranked')}
+        onOpenSlipsModal={() => setExtraModalMode('slips')}
+      />
 
       {/* Workspace Tabs */}
       <div className="no-print flex flex-wrap gap-2">
@@ -251,6 +527,8 @@ export function CoursePp5Workspace() {
             <ScoreStructureTab
               course={course}
               students={courseStudents}
+              allCourses={courses}
+              allStudents={students}
               allIndicators={indicators}
               scoreStructure={scoreStructure}
               studentScores={studentScores}
@@ -267,6 +545,7 @@ export function CoursePp5Workspace() {
                   });
                 }
               }}
+              onSaveCourseObject={saveCourse}
               onSaveStructure={async (struct) => {
                 const saved = await dataService.saveScoreStructure(course.id, struct);
                 setScoreStructure(saved);
@@ -275,6 +554,8 @@ export function CoursePp5Workspace() {
                 const saved = await dataService.saveStudentScoresBatch(course.id, rows);
                 setStudentScores(saved);
               }}
+              onCreatePp6Draft={handleCreatePp6Draft}
+              onOpenSemesterMerge={() => setExtraModalMode('merge')}
             />
           )}
 
@@ -355,6 +636,21 @@ export function CoursePp5Workspace() {
           </div>
         </div>
       </Modal>
+
+      <Pp5ExtraReportsModal
+        mode={extraModalMode}
+        onClose={() => setExtraModalMode(null)}
+        course={course}
+        allCourses={courses}
+        settings={settings}
+        teacher={teacher}
+        students={courseStudents}
+        scoreStructure={scoreStructure}
+        computedScoresMap={computedScoresMap}
+        attendanceStatsMap={attendanceStatsMap}
+        characteristicsMap={characteristicsMap}
+        onApplyMergedAnnualScores={handleApplyMergedAnnualScores}
+      />
     </div>
   );
 }

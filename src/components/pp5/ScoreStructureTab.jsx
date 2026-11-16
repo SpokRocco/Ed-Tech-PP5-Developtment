@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Sparkles,
   Plus,
@@ -17,18 +17,27 @@ import {
 import {
   computeStudentCourseScores,
   getFullStudentName,
+  parseBulkStudentLines,
+  splitThaiFullName,
 } from '../../lib/thaiFormatting';
+import { IndicatorAssessmentSection } from './IndicatorAssessmentSection';
+import { UnifiedRosterScoreTable } from './UnifiedRosterScoreTable';
 
 export function ScoreStructureTab({
   course,
   students,
+  allCourses = [],
+  allStudents = [],
   allIndicators,
   scoreStructure,
   studentScores,
   attendanceStatsMap,
   onUpdateCourseIndicators,
+  onSaveCourseObject,
   onSaveStructure,
   onSaveScores,
+  onCreatePp6Draft,
+  onOpenSemesterMerge,
 }) {
   const [selectedIds, setSelectedIds] = useState(course.selected_indicator_ids || []);
   const [customIndicatorsText, setCustomIndicatorsText] = useState(
@@ -47,6 +56,29 @@ export function ScoreStructureTab({
   const [minAttendancePct, setMinAttendancePct] = useState(
     Number(scoreStructure?.grading_policy?.minAttendancePct ?? 80)
   );
+  const [indicatorMode, setIndicatorMode] = useState(
+    scoreStructure?.grading_policy?.indicatorMode || 'score'
+  );
+  const [indicatorPassPct, setIndicatorPassPct] = useState(
+    Number(scoreStructure?.grading_policy?.indicatorPassPct ?? 50)
+  );
+  const [indicatorMaxScores, setIndicatorMaxScores] = useState(
+    scoreStructure?.grading_policy?.indicatorMaxScores || {}
+  );
+
+  // Sync from parent when top header config / preset / rounding updates scoreStructure
+  useEffect(() => {
+    if (!scoreStructure) return;
+    setFormativeRatio(scoreStructure.formative_ratio ?? 60);
+    setMidtermRatio(scoreStructure.midterm_ratio ?? 20);
+    setFinalRatio(scoreStructure.final_ratio ?? 20);
+    setUnits(scoreStructure.units || []);
+    setRequireFinalExam(Boolean(scoreStructure.grading_policy?.requireFinalExam ?? false));
+    setMinAttendancePct(Number(scoreStructure.grading_policy?.minAttendancePct ?? 80));
+    setIndicatorMode(scoreStructure.grading_policy?.indicatorMode || 'score');
+    setIndicatorPassPct(Number(scoreStructure.grading_policy?.indicatorPassPct ?? 50));
+    setIndicatorMaxScores(scoreStructure.grading_policy?.indicatorMaxScores || {});
+  }, [scoreStructure]);
 
   // Local editable score rows keyed by student_id
   const [scoreDrafts, setScoreDrafts] = useState(() => {
@@ -57,7 +89,16 @@ export function ScoreStructureTab({
     return map;
   });
 
+  useEffect(() => {
+    const map = {};
+    (studentScores || []).forEach((row) => {
+      map[row.student_id] = row;
+    });
+    setScoreDrafts(map);
+  }, [studentScores]);
+
   const [savingMsg, setSavingMsg] = useState('');
+  const [savingAll, setSavingAll] = useState(false);
 
   // Auto-matched curriculum indicators based on subject's learning_area & grade_level
   const autoMatchedIndicators = useMemo(() => {
@@ -180,18 +221,39 @@ export function ScoreStructureTab({
       final_ratio: Number(finalRatio),
       units,
       grading_policy: {
+        ...(scoreStructure?.grading_policy || {}),
         minAttendancePct: Number(minAttendancePct),
         requireFinalExam,
+        indicatorMode,
+        indicatorPassPct: Number(indicatorPassPct),
+        indicatorMaxScores,
       },
     }),
-    [course.id, formativeRatio, midtermRatio, finalRatio, units, minAttendancePct, requireFinalExam]
+    [
+      course.id,
+      formativeRatio,
+      midtermRatio,
+      finalRatio,
+      units,
+      scoreStructure?.grading_policy,
+      minAttendancePct,
+      requireFinalExam,
+      indicatorMode,
+      indicatorPassPct,
+      indicatorMaxScores,
+    ]
   );
 
   const computedStudents = useMemo(() => {
     return students.map((stu) => {
       const draft = scoreDrafts[stu.id] || { unit_scores: {}, special_status: null };
       const att = attendanceStatsMap[stu.id];
-      const computed = computeStudentCourseScores(draft, currentStructure, att);
+      const computed = computeStudentCourseScores(
+        draft,
+        currentStructure,
+        att,
+        course?.total_hours || 40
+      );
       return {
         student: stu,
         draft,
@@ -199,7 +261,7 @@ export function ScoreStructureTab({
         computed,
       };
     });
-  }, [students, scoreDrafts, currentStructure, attendanceStatsMap]);
+  }, [students, scoreDrafts, currentStructure, attendanceStatsMap, course?.total_hours]);
 
   const gradeSummary = useMemo(() => {
     const counts = { '4': 0, '3.5': 0, '3': 0, '2.5': 0, '2': 0, '1.5': 0, '1': 0, '0': 0, 'ร': 0, 'มส': 0 };
@@ -216,19 +278,318 @@ export function ScoreStructureTab({
       if (Number.isNaN(num)) return;
       val = Math.max(0, Math.min(Number(maxScore) || 100, num));
     }
+    const targetUnit = units.find((u) => u.id === unitId);
     setScoreDrafts((prev) => {
       const cur = prev[studentId] || { student_id: studentId, unit_scores: {} };
+      const nextUnitScores = {
+        ...(cur.unit_scores || {}),
+        [unitId]: val,
+      };
+      // ถ้าระบุคะแนนรายหน่วย ให้ล้าง direct override ในหมวดเดียวกันเพื่อให้คำนวณจากหน่วยจริง
+      if (targetUnit?.category === 'midterm') delete nextUnitScores.__directMidterm;
+      else if (targetUnit?.category === 'final') delete nextUnitScores.__directFinal;
+      else delete nextUnitScores.__directFormative;
+
+      return {
+        ...prev,
+        [studentId]: {
+          ...cur,
+          unit_scores: nextUnitScores,
+        },
+      };
+    });
+  };
+
+  const handleDirectFieldChange = (studentId, fieldKey, val) => {
+    setScoreDrafts((prev) => {
+      const cur = prev[studentId] || { student_id: studentId, unit_scores: {} };
+      const nextUnitScores = { ...(cur.unit_scores || {}) };
+      if (val === '' || val === null || val === undefined) {
+        delete nextUnitScores[fieldKey];
+      } else {
+        nextUnitScores[fieldKey] = val;
+      }
+      return {
+        ...prev,
+        [studentId]: {
+          ...cur,
+          unit_scores: nextUnitScores,
+        },
+      };
+    });
+  };
+
+  const handleStudentIndicatorChange = (studentId, indKey, val) => {
+    setScoreDrafts((prev) => {
+      const cur = prev[studentId] || { student_id: studentId, unit_scores: {} };
+      const nextInd = { ...(cur.unit_scores?.indicatorScores || {}) };
+      if (val === '' || val === null || val === undefined) {
+        delete nextInd[indKey];
+      } else {
+        nextInd[indKey] = indicatorMode === 'pass_fail' ? val : Number(val);
+      }
       return {
         ...prev,
         [studentId]: {
           ...cur,
           unit_scores: {
             ...(cur.unit_scores || {}),
-            [unitId]: val,
+            indicatorScores: nextInd,
           },
         },
       };
     });
+  };
+
+  const buildScorePayloadRows = (draftsSnapshot = scoreDrafts, structSnapshot = currentStructure) => {
+    return students.map((stu) => {
+      const draft = draftsSnapshot[stu.id] || { unit_scores: {}, special_status: null };
+      const att = attendanceStatsMap[stu.id];
+      const computed = computeStudentCourseScores(
+        draft,
+        structSnapshot,
+        att,
+        course?.total_hours || 40
+      );
+      return {
+        course_id: course.id,
+        student_id: stu.id,
+        unit_scores: draft.unit_scores || {},
+        formative_total: computed.formativeTotal,
+        midterm_score: computed.midtermTotal,
+        final_score: computed.finalTotal,
+        total_score: computed.totalScore,
+        grade: computed.grade,
+        special_status: draft.special_status || null,
+      };
+    });
+  };
+
+  const handleTransferIndicatorsToFormative = async (formativeMap) => {
+    const nextDrafts = { ...scoreDrafts };
+    Object.entries(formativeMap).forEach(([stuId, val]) => {
+      const cur = nextDrafts[stuId] || { student_id: stuId, unit_scores: {} };
+      nextDrafts[stuId] = {
+        ...cur,
+        unit_scores: {
+          ...(cur.unit_scores || {}),
+          __directFormative: val,
+        },
+      };
+    });
+    setScoreDrafts(nextDrafts);
+    await onSaveStructure(currentStructure);
+    await onSaveScores(buildScorePayloadRows(nextDrafts, currentStructure));
+    setSavingMsg('นำผลรวมตัวชี้วัด (หัวข้อ ๑.๑) ใส่ช่อง "เก็บ" และบันทึกเรียบร้อยแล้ว');
+  };
+
+  const handleClearAllIndicators = async () => {
+    const nextDrafts = { ...scoreDrafts };
+    students.forEach((stu) => {
+      const cur = nextDrafts[stu.id] || { student_id: stu.id, unit_scores: {} };
+      const nextUnits = { ...(cur.unit_scores || {}) };
+      delete nextUnits.indicatorScores;
+      nextDrafts[stu.id] = { ...cur, unit_scores: nextUnits };
+    });
+    setScoreDrafts(nextDrafts);
+    await onSaveScores(buildScorePayloadRows(nextDrafts, currentStructure));
+    setSavingMsg('ล้างข้อมูลประเมินตัวชี้วัด หัวข้อ ๑.๑ ทั้งตารางเรียบร้อย');
+  };
+
+  const handleBulkAddStudents = async (rawText) => {
+    const parsed = parseBulkStudentLines(rawText, students.length + 1);
+    if (!parsed.length) return;
+    const prevCustom = [...(course.cover_settings?.customStudents || [])];
+    const nextIds = [...(course.student_ids || students.map((s) => s.id))];
+
+    parsed.forEach((p, idx) => {
+      // ตรวจว่ามีในฐานข้อมูลกลางของโรงเรียนหรือไม่ (เทียบจากรหัสหรือชื่อ)
+      const matched = allStudents.find(
+        (s) =>
+          (p.student_code && String(s.student_code) === String(p.student_code)) ||
+          (s.first_name === p.first_name && s.last_name === p.last_name)
+      );
+      if (matched) {
+        if (!nextIds.includes(matched.id)) nextIds.push(matched.id);
+      } else {
+        const newId = `cstu-${Date.now()}-${idx}`;
+        prevCustom.push({
+          id: newId,
+          student_code: p.student_code || '',
+          prefix: p.prefix,
+          first_name: p.first_name,
+          last_name: p.last_name,
+          gender: p.gender,
+          grade_level: course.grade_level,
+          classroom: course.classroom,
+          student_number: p.student_number,
+          status: 'active',
+        });
+        nextIds.push(newId);
+      }
+    });
+
+    await onSaveCourseObject({
+      ...course,
+      student_ids: Array.from(new Set(nextIds)),
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        customStudents: prevCustom,
+      },
+    });
+    setSavingMsg(`เพิ่มรายชื่อนักเรียน ${parsed.length} คนเรียบร้อย (แปลงคำนำหน้าอัตโนมัติ)`);
+  };
+
+  const handleImportRosterFromSource = async (source) => {
+    const prevCustom = [...(course.cover_settings?.customStudents || [])];
+    const nextIds = [...(course.student_ids || [])];
+    let addedCount = 0;
+
+    if (source.type === 'room') {
+      source.students.forEach((s) => {
+        if (!nextIds.includes(s.id)) {
+          nextIds.push(s.id);
+          addedCount += 1;
+        }
+      });
+    } else if (source.type === 'course' && source.sourceCourse) {
+      const srcIds = source.sourceCourse.student_ids || [];
+      const srcCustom = source.sourceCourse.cover_settings?.customStudents || [];
+      srcIds.forEach((id) => {
+        if (!nextIds.includes(id)) {
+          nextIds.push(id);
+          addedCount += 1;
+        }
+      });
+      srcCustom.forEach((cs) => {
+        if (!prevCustom.some((x) => x.id === cs.id)) prevCustom.push(cs);
+        if (!nextIds.includes(cs.id)) nextIds.push(cs.id);
+      });
+    }
+
+    await onSaveCourseObject({
+      ...course,
+      student_ids: Array.from(new Set(nextIds)),
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        customStudents: prevCustom,
+      },
+    });
+    setSavingMsg(`ดึงรายชื่อนักเรียนเรียบร้อย (+${addedCount} คน)`);
+  };
+
+  const handleAddBlankRow = async () => {
+    const prevCustom = [...(course.cover_settings?.customStudents || [])];
+    const nextIds = [...(course.student_ids || students.map((s) => s.id))];
+    const newId = `cstu-${Date.now()}`;
+    prevCustom.push({
+      id: newId,
+      student_code: '',
+      prefix: 'เด็กชาย',
+      first_name: `นักเรียนใหม่ ${students.length + 1}`,
+      last_name: '',
+      gender: 'ชาย',
+      grade_level: course.grade_level,
+      classroom: course.classroom,
+      student_number: students.length + 1,
+      status: 'active',
+    });
+    nextIds.push(newId);
+    await onSaveCourseObject({
+      ...course,
+      student_ids: Array.from(new Set(nextIds)),
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        customStudents: prevCustom,
+      },
+    });
+  };
+
+  const handleUpdateStudentRowMeta = async (studentId, patch) => {
+    const customList = [...(course.cover_settings?.customStudents || [])];
+    const overrides = { ...(course.cover_settings?.rosterOverrides || {}) };
+    const parsedName = patch.fullName ? splitThaiFullName(patch.fullName) : null;
+    const cleanPatch = { ...patch };
+    delete cleanPatch.fullName;
+    if (parsedName) {
+      Object.assign(cleanPatch, parsedName);
+    }
+
+    const customIdx = customList.findIndex((c) => c.id === studentId);
+    if (customIdx >= 0) {
+      customList[customIdx] = { ...customList[customIdx], ...cleanPatch };
+    } else {
+      overrides[studentId] = { ...(overrides[studentId] || {}), ...cleanPatch };
+    }
+
+    await onSaveCourseObject({
+      ...course,
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        customStudents: customList,
+        rosterOverrides: overrides,
+      },
+    });
+  };
+
+  const handleRemoveCourseStudent = async (studentId) => {
+    const nextIds = (course.student_ids || students.map((s) => s.id)).filter((id) => id !== studentId);
+    const prevCustom = (course.cover_settings?.customStudents || []).filter((c) => c.id !== studentId);
+    await onSaveCourseObject({
+      ...course,
+      student_ids: nextIds,
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        customStudents: prevCustom,
+      },
+    });
+  };
+
+  const handleRenumberStudents = async () => {
+    const customList = [...(course.cover_settings?.customStudents || [])];
+    const overrides = { ...(course.cover_settings?.rosterOverrides || {}) };
+    students.forEach((stu, idx) => {
+      const no = idx + 1;
+      const customIdx = customList.findIndex((c) => c.id === stu.id);
+      if (customIdx >= 0) {
+        customList[customIdx] = { ...customList[customIdx], student_number: no };
+      } else {
+        overrides[stu.id] = { ...(overrides[stu.id] || {}), student_number: no };
+      }
+    });
+    await onSaveCourseObject({
+      ...course,
+      cover_settings: {
+        ...(course.cover_settings || {}),
+        customStudents: customList,
+        rosterOverrides: overrides,
+      },
+    });
+    setSavingMsg('รันเลขที่นักเรียนใหม่ (1 - ' + students.length + ') เรียบร้อย');
+  };
+
+  const handleFillEmptyAttendanceFull = async () => {
+    const planHours = Number(course?.total_hours || 40);
+    const nextDrafts = { ...scoreDrafts };
+    let filledCount = 0;
+    computedStudents.forEach(({ student, draft, att }) => {
+      const curHours =
+        draft.unit_scores?.__manualAttendanceHours ??
+        (att?.totalRecorded > 0 ? att.attendedPeriods : '');
+      if (curHours === '' || curHours === null || curHours === undefined) {
+        nextDrafts[student.id] = {
+          ...(draft || { student_id: student.id }),
+          unit_scores: {
+            ...(draft.unit_scores || {}),
+            __manualAttendanceHours: planHours,
+          },
+        };
+        filledCount += 1;
+      }
+    });
+    setScoreDrafts(nextDrafts);
+    await onSaveScores(buildScorePayloadRows(nextDrafts, currentStructure));
+    setSavingMsg(`เติมเวลาเรียนเต็ม (${planHours} ชม.) ให้ช่องที่ว่างแล้ว ${filledCount} คน`);
   };
 
   const handleSpecialStatusChange = (studentId, val) => {
@@ -249,25 +610,19 @@ export function ScoreStructureTab({
       setSavingMsg('สัดส่วนคะแนน ระหว่างภาค + กลางภาค + ปลายภาค ต้องรวมกันได้ 100 พอดี');
       return;
     }
-    await onUpdateCourseIndicators({
-      selected_indicator_ids: selectedIds,
-      custom_indicators_text: customIndicatorsText,
-      indicators_status: indicatorsStatus,
-    });
-    await onSaveStructure(currentStructure);
-    const scoreRows = computedStudents.map(({ student, draft, computed }) => ({
-      course_id: course.id,
-      student_id: student.id,
-      unit_scores: draft.unit_scores || {},
-      formative_total: computed.formativeTotal,
-      midterm_score: computed.midtermTotal,
-      final_score: computed.finalTotal,
-      total_score: computed.totalScore,
-      grade: computed.grade,
-      special_status: draft.special_status || null,
-    }));
-    await onSaveScores(scoreRows);
-    setSavingMsg('บันทึกมาตรฐานตัวชี้วัด โครงสร้างคะแนน และผลการตัดเกรดทั้งหมดเรียบร้อย');
+    setSavingAll(true);
+    try {
+      await onUpdateCourseIndicators({
+        selected_indicator_ids: selectedIds,
+        custom_indicators_text: customIndicatorsText,
+        indicators_status: indicatorsStatus,
+      });
+      await onSaveStructure(currentStructure);
+      await onSaveScores(buildScorePayloadRows(scoreDrafts, currentStructure));
+      setSavingMsg('บันทึกมาตรฐานตัวชี้วัด โครงสร้างคะแนน และผลการตัดเกรดทั้งหมดเรียบร้อย');
+    } finally {
+      setSavingAll(false);
+    }
   };
 
   return (
@@ -284,6 +639,52 @@ export function ScoreStructureTab({
           {savingMsg}
         </div>
       )}
+
+      {/* Section Main: Unified Live Roster + Attendance Hours + Formative/Midterm/Final + Grade */}
+      <UnifiedRosterScoreTable
+        course={course}
+        students={students}
+        allCourses={allCourses}
+        allStudents={allStudents}
+        scoreStructure={currentStructure}
+        scoreDrafts={scoreDrafts}
+        computedStudents={computedStudents}
+        attendanceStatsMap={attendanceStatsMap}
+        gradeSummary={gradeSummary}
+        onChangeDirectField={handleDirectFieldChange}
+        onChangeSpecialStatus={handleSpecialStatusChange}
+        onBulkAddStudents={handleBulkAddStudents}
+        onImportRosterFromCourse={handleImportRosterFromSource}
+        onAddBlankStudentRow={handleAddBlankRow}
+        onUpdateStudentRowMeta={handleUpdateStudentRowMeta}
+        onRemoveCourseStudent={handleRemoveCourseStudent}
+        onRenumberStudents={handleRenumberStudents}
+        onFillEmptyAttendanceFull={handleFillEmptyAttendanceFull}
+        onCreatePp6Draft={onCreatePp6Draft}
+        onOpenSemesterMerge={onOpenSemesterMerge}
+        onSaveAll={handleSaveAll}
+        saving={savingAll}
+      />
+
+      {/* Section 1.1: Per-Indicator Individual Assessment Matrix */}
+      <IndicatorAssessmentSection
+        students={students}
+        customIndicatorsText={customIndicatorsText}
+        selectedIndicatorObjects={selectedIndicatorObjects}
+        formativeRatio={formativeRatio}
+        indicatorMode={indicatorMode}
+        indicatorPassPct={indicatorPassPct}
+        indicatorMaxScores={indicatorMaxScores}
+        scoreDrafts={scoreDrafts}
+        onChangeMode={setIndicatorMode}
+        onChangePassPct={setIndicatorPassPct}
+        onChangeMaxScore={(indKey, maxVal) =>
+          setIndicatorMaxScores((prev) => ({ ...prev, [indKey]: maxVal }))
+        }
+        onChangeStudentIndicatorScore={handleStudentIndicatorChange}
+        onTransferSumToFormative={handleTransferIndicatorsToFormative}
+        onClearAllIndicatorScores={handleClearAllIndicators}
+      />
 
       {/* Section A: Course Indicators Box (Auto-Fill + Sample Badge + Checklist + 1-line-per-indicator Textarea) */}
       <div className="bg-white rounded-2xl border border-ivory-300 shadow-sm overflow-hidden">

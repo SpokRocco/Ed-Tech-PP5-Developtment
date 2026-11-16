@@ -28,8 +28,23 @@ import {
   TRAITS_5_2568,
   computePrimary2568Summary,
 } from '../data/primary2568Curriculum';
-import { DESIRABLE_TRAITS_8, READING_THINKING_WRITING_CRITERIA } from './scoringConfigAdapter';
+import { DESIRABLE_TRAITS_8, READING_THINKING_WRITING_CRITERIA, ROUNDING_OPTIONS } from './scoringConfigAdapter';
 import { buildCoverSummaryStats, mergeReportLayout } from './reportLayoutAdapter';
+
+function resolveCourseExportMeta(course, settings, teacher, scoreStructure) {
+  const ov = course?.cover_settings?.courseMetaOverrides || {};
+  const roundingId = scoreStructure?.grading_policy?.roundingMode || 'none';
+  const roundingMeta = ROUNDING_OPTIONS.find((r) => r.id === roundingId) || ROUNDING_OPTIONS[0];
+  return {
+    schoolName: ov.school_name || settings?.school_name || 'โรงเรียนบ้านหาดเค็ด',
+    affiliationLabel:
+      ov.affiliation ||
+      `${settings?.affiliation || ''}${settings?.affiliation_short ? ` (${settings.affiliation_short})` : ''}`.trim(),
+    teacherName: ov.teacher_name || teacher?.full_name || '-',
+    directorName: ov.director_name || settings?.director_name || '-',
+    roundingFootnote: roundingMeta.footnote,
+  };
+}
 
 /**
  * ============================================================================
@@ -69,20 +84,22 @@ export function exportPp5ToExcel({
 }) {
   const layout = mergeReportLayout(settings?.cover_config, course?.cover_settings);
   const summary = buildCoverSummaryStats(students, computedScoresMap, characteristicsMap);
+  const meta = resolveCourseExportMeta(course, settings, teacher, scoreStructure);
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: ปกและสรุปผล
   const coverRows = [
     [layout.documentCode, layout.documentTitle],
-    ['สถานศึกษา', settings.school_name],
-    ['สังกัด', `${settings.affiliation} (${settings.affiliation_short})`],
+    ['สถานศึกษา', meta.schoolName],
+    ['สังกัด', meta.affiliationLabel],
     ['ปีการศึกษา / ภาคเรียน', `${course.academic_year} ภาคเรียนที่ ${course.semester}`],
     ['รหัสวิชา / รายวิชา', `${course.subject_code} ${course.subject_name}`],
     ['กลุ่มสาระการเรียนรู้', course.learning_area],
     ['ระดับชั้น / ห้อง', `${course.grade_level}/${course.classroom}`],
-    ['หน่วยกิต / เวลาเรียน', `${course.credits} หน่วยกิต (${course.total_hours} ชั่วโมง)`],
-    ['ครูผู้สอน', teacher?.full_name || '-'],
-    ['ผู้อำนวยการโรงเรียน', settings.director_name],
+    ['หน่วยกิต / เวลาเรียน', `${course.credits ?? '-'} หน่วยกิต (${course.total_hours ?? '-'} ชั่วโมง)`],
+    ['ครูผู้สอน', meta.teacherName],
+    ['ผู้อำนวยการโรงเรียน', meta.directorName],
+    ['เกณฑ์การปัดคะแนนรวม', meta.roundingFootnote],
     [],
     ['ตารางสรุปผลสัมฤทธิ์ทางการเรียน'],
     ['จำนวนนักเรียนทั้งหมด', summary.totalStudents],
@@ -118,10 +135,16 @@ export function exportPp5ToExcel({
       row[`${s.date} (ค.${s.period})`] = ATTENDANCE_STATUS[st]?.code || '/';
     });
     const stat = attendanceStatsMap[stu.id] || { totalRecorded: 0, attendedPeriods: 0, attendancePct: 100, statusLabel: 'มีสิทธิ์สอบ' };
-    row['มาเรียน(คาบ)'] = stat.attendedPeriods;
-    row['คาบทั้งหมด'] = stat.totalRecorded;
-    row['ร้อยละเวลาเรียน'] = `${stat.attendancePct}%`;
-    row['สิทธิ์สอบ'] = stat.statusLabel;
+    const computed = computedScoresMap[stu.id] || {};
+    const effectiveAttHours =
+      computed.manualAttendanceHours !== null && computed.manualAttendanceHours !== undefined
+        ? computed.manualAttendanceHours
+        : stat.attendedPeriods;
+    const effectiveAttPct = computed.effectiveAttendancePct ?? stat.attendancePct;
+    row['มาเรียน(ชม./คาบ)'] = effectiveAttHours;
+    row['คาบ/ชม.แผนทั้งหมด'] = stat.totalRecorded || course.total_hours || 40;
+    row['ร้อยละเวลาเรียน'] = `${effectiveAttPct}%`;
+    row['สิทธิ์สอบ'] = effectiveAttPct < (scoreStructure?.grading_policy?.minAttendancePct ?? 80) ? 'มส' : 'มีสิทธิ์สอบ';
     return row;
   });
   const wsAtt = XLSX.utils.json_to_sheet(attData);
@@ -146,6 +169,7 @@ export function exportPp5ToExcel({
     row['ผลการเรียน'] = computed.grade ?? '0';
     return row;
   });
+  scoreRows.push({ 'ชื่อ-สกุล': `เชิงอรรถ: ${meta.roundingFootnote}` });
   const wsScores = XLSX.utils.json_to_sheet(scoreRows);
   XLSX.utils.book_append_sheet(wb, wsScores, '3_คะแนนและตัดเกรด');
 
@@ -192,6 +216,25 @@ export function exportPp5ToExcel({
         }));
   const wsInd = XLSX.utils.json_to_sheet(indRows.length ? indRows : [{ หมายเหตุ: 'ยังไม่มีข้อมูลตัวชี้วัด' }]);
   XLSX.utils.book_append_sheet(wb, wsInd, '5_มาตรฐานตัวชี้วัด');
+
+  // Sheet 6 (ถ้ามีการประเมินตามตัวชี้วัดรายบุคคล หัวข้อ 1.1)
+  const indAssessRows = students.map((stu, idx) => {
+    const computed = computedScoresMap[stu.id] || {};
+    const indMap = computed.unitScores?.indicatorScores || {};
+    const row = {
+      เลขที่: stu.student_number || idx + 1,
+      'ชื่อ-สกุล': getFullStudentName(stu),
+    };
+    Object.keys(indMap).forEach((k, colIdx) => {
+      row[`ตัวชี้วัด_${colIdx + 1}`] = indMap[k];
+    });
+    row['รวมคะแนนระหว่างเรียน'] = computed.formativeTotal ?? 0;
+    return row;
+  });
+  if (indAssessRows.some((r) => Object.keys(r).length > 3)) {
+    const wsIndAssess = XLSX.utils.json_to_sheet(indAssessRows);
+    XLSX.utils.book_append_sheet(wb, wsIndAssess, '1.1_ประเมินรายตัวชี้วัด');
+  }
 
   const safeCode = `${course.subject_code}_${course.grade_level}-${course.classroom}`.replace(/[^\wก-๙.-]/g, '_');
   XLSX.writeFile(wb, `ปพ5_${safeCode}_ปี${course.academic_year}.xlsx`);
@@ -257,13 +300,14 @@ export async function exportPp5ToDocx({
 }) {
   const layout = mergeReportLayout(settings?.cover_config, course?.cover_settings);
   const summary = buildCoverSummaryStats(students, computedScoresMap, characteristicsMap);
+  const meta = resolveCourseExportMeta(course, settings, teacher, scoreStructure);
 
   // Portrait Section: Cover + Summary + Indicators
   const coverChildren = [
     makeDocxParagraph(layout.documentCode, { bold: true, size: 44, align: AlignmentType.CENTER, spaceAfter: 60 }),
     makeDocxParagraph(layout.documentTitle, { bold: true, size: 34, align: AlignmentType.CENTER, spaceAfter: 60 }),
     makeDocxParagraph(layout.subtitle, { size: 24, align: AlignmentType.CENTER, spaceAfter: 160 }),
-    makeDocxParagraph(`${settings.school_name} • ${settings.affiliation}`, { bold: true, size: 28, align: AlignmentType.CENTER, spaceAfter: 200 }),
+    makeDocxParagraph(`${meta.schoolName} • ${meta.affiliationLabel}`, { bold: true, size: 28, align: AlignmentType.CENTER, spaceAfter: 200 }),
 
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
@@ -295,7 +339,7 @@ export async function exportPp5ToDocx({
         new TableRow({
           children: [
             makeDocxCell('ครูผู้สอน', { bold: true, align: AlignmentType.LEFT, shading: 'EEF2F9' }),
-            makeDocxCell(`${teacher?.full_name || '-'} (${teacher?.academic_standing || teacher?.position || 'ครู'})`, { align: AlignmentType.LEFT }),
+            makeDocxCell(`${meta.teacherName} (${teacher?.academic_standing || teacher?.position || 'ครู'})`, { align: AlignmentType.LEFT }),
           ],
         }),
       ],
@@ -435,12 +479,13 @@ export async function exportPp5ToDocx({
     const computed = computedScoresMap[stu.id] || {};
     const att = attendanceStatsMap[stu.id] || { attendancePct: 100 };
     const ch = characteristicsMap[stu.id] || {};
+    const effectiveAtt = computed.effectiveAttendancePct ?? att.attendancePct ?? 100;
     return new TableRow({
       children: [
         makeDocxCell(stu.student_number || idx + 1, { size: 20 }),
         makeDocxCell(stu.student_code, { size: 20 }),
         makeDocxCell(getFullStudentName(stu), { align: AlignmentType.LEFT, size: 20 }),
-        makeDocxCell(`${att.attendancePct}%`, { size: 20 }),
+        makeDocxCell(`${effectiveAtt}%`, { size: 20 }),
         ...units.map((u) => makeDocxCell(computed.unitScores?.[u.id] ?? 0, { size: 20 })),
         makeDocxCell(computed.totalScore ?? 0, { bold: true, size: 20 }),
         makeDocxCell(computed.grade ?? '0', { bold: true, size: 20 }),
@@ -487,7 +532,8 @@ export async function exportPp5ToDocx({
               ...scoreBodyRows,
             ],
           }),
-          makeDocxParagraph('', { spaceAfter: 120 }),
+          makeDocxParagraph('', { spaceAfter: 80 }),
+          makeDocxParagraph(meta.roundingFootnote, { size: 20, align: AlignmentType.LEFT, spaceAfter: 80 }),
           makeDocxParagraph(layout.footerCredit, { size: 20, align: AlignmentType.CENTER }),
         ],
       },
@@ -1080,4 +1126,184 @@ export async function exportPrimary2568ToDocx({
       ? `ปพ6_รายบุคคล_${gradeLevel}-${classroom}_GoogleDocs.docx`
       : `ปพ5_2569_${gradeLevel}-${classroom}_GoogleDocs.docx`
   );
+}
+
+/**
+ * 6) แบบสรุปคะแนนรายชั้น (เรียงอันดับ) — Excel (.xlsx) & Word (.docx)
+ */
+export function exportRankedSummaryToExcel({ course, settings, teacher, scoreStructure, rankedReport }) {
+  const meta = resolveCourseExportMeta(course, settings, teacher, scoreStructure);
+  const { rankedRows, stats } = rankedReport;
+  const wb = XLSX.utils.book_new();
+  const rows = [
+    [`แบบสรุปคะแนนรายชั้น (เรียงอันดับ) — ${course.subject_code} ${course.subject_name}`],
+    [`${meta.schoolName} | ชั้น ${course.grade_level}/${course.classroom} | ภาคเรียนที่ ${course.semester}/${course.academic_year}`],
+    [`ค่าเฉลี่ย (Mean): ${stats.mean} | S.D.: ${stats.sd} | สูงสุด: ${stats.max} | ต่ำสุด: ${stats.min} | ร้อยละผ่าน: ${stats.passPct}%`],
+    [],
+    ['อันดับที่', 'เลขที่', 'รหัสนักเรียน', 'ชื่อ - สกุล', 'เวลาเรียน (%)', 'เก็บ', 'กลางภาค', 'ปลายภาค', 'รวม (100)', 'เกรด'],
+    ...rankedRows.map((r) => [
+      r.rank,
+      r.no,
+      r.student_code,
+      r.fullName,
+      `${r.attendancePct}%`,
+      r.formativeTotal,
+      r.midtermTotal,
+      r.finalTotal,
+      r.totalScore,
+      r.grade,
+    ]),
+    [],
+    [meta.roundingFootnote],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  XLSX.utils.book_append_sheet(wb, ws, 'สรุปคะแนนเรียงอันดับ');
+  const safeCode = `${course.subject_code}_${course.grade_level}-${course.classroom}`.replace(/[^\wก-๙.-]/g, '_');
+  XLSX.writeFile(wb, `สรุปคะแนนเรียงอันดับ_${safeCode}.xlsx`);
+}
+
+export async function exportRankedSummaryToDocx({ course, settings, teacher, scoreStructure, rankedReport }) {
+  const meta = resolveCourseExportMeta(course, settings, teacher, scoreStructure);
+  const { rankedRows, stats } = rankedReport;
+  const doc = new Document({
+    sections: [
+      {
+        properties: { page: { size: { orientation: PageOrientation.PORTRAIT }, margin: { top: 720, bottom: 720, left: 720, right: 720 } } },
+        children: [
+          makeDocxParagraph(meta.schoolName, { bold: true, size: 30, align: AlignmentType.CENTER, spaceAfter: 40 }),
+          makeDocxParagraph(`แบบสรุปคะแนนรายชั้นเรียน (เรียงอันดับ) — ${course.subject_code} ${course.subject_name}`, {
+            bold: true,
+            size: 28,
+            align: AlignmentType.CENTER,
+            spaceAfter: 60,
+          }),
+          makeDocxParagraph(
+            `ชั้น ${course.grade_level}/${course.classroom} • ภาคเรียนที่ ${course.semester}/${course.academic_year} • ครูผู้สอน: ${meta.teacherName}`,
+            { size: 22, align: AlignmentType.CENTER, spaceAfter: 120 }
+          ),
+          makeDocxParagraph(
+            `ค่าเฉลี่ย ${stats.mean}   |   S.D. ${stats.sd}   |   สูงสุด ${stats.max}   |   ต่ำสุด ${stats.min}   |   ผ่าน ${stats.passedCount}/${stats.count} คน (${stats.passPct}%)`,
+            { bold: true, size: 22, align: AlignmentType.CENTER, spaceAfter: 140 }
+          ),
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [
+              new TableRow({
+                children: ['อันดับ', 'เลขที่', 'รหัส', 'ชื่อ - สกุล', 'เวลา(%)', 'เก็บ', 'กลาง', 'ปลาย', 'รวม', 'เกรด'].map((h) =>
+                  makeDocxCell(h, { bold: true, shading: 'EEF2F9', size: 20 })
+                ),
+              }),
+              ...rankedRows.map(
+                (r) =>
+                  new TableRow({
+                    children: [
+                      makeDocxCell(r.rank, { bold: true, size: 20 }),
+                      makeDocxCell(r.no, { size: 20 }),
+                      makeDocxCell(r.student_code, { size: 18 }),
+                      makeDocxCell(r.fullName, { align: AlignmentType.LEFT, size: 20 }),
+                      makeDocxCell(`${r.attendancePct}%`, { size: 20 }),
+                      makeDocxCell(r.formativeTotal, { size: 20 }),
+                      makeDocxCell(r.midtermTotal, { size: 20 }),
+                      makeDocxCell(r.finalTotal, { size: 20 }),
+                      makeDocxCell(r.totalScore, { bold: true, size: 20 }),
+                      makeDocxCell(r.grade, { bold: true, size: 20 }),
+                    ],
+                  })
+              ),
+            ],
+          }),
+          makeDocxParagraph('', { spaceAfter: 80 }),
+          makeDocxParagraph(meta.roundingFootnote, { size: 20, spaceAfter: 160 }),
+          makeDocxParagraph(
+            `ลงชื่อ........................................... (${meta.teacherName})    ลงชื่อ........................................... (${meta.directorName})`,
+            { size: 20, align: AlignmentType.CENTER }
+          ),
+        ],
+      },
+    ],
+  });
+  const blob = await Packer.toBlob(doc);
+  const safeCode = `${course.subject_code}_${course.grade_level}-${course.classroom}`.replace(/[^\wก-๙.-]/g, '_');
+  downloadBlob(blob, `สรุปคะแนนเรียงอันดับ_${safeCode}_GoogleDocs.docx`);
+}
+
+/**
+ * 7) ใบแจ้งผลการเรียนรายบุคคล (แจกผู้ปกครอง/นักเรียน) — Word (.docx)
+ */
+export async function exportIndividualSlipsToDocx({
+  course,
+  settings,
+  teacher,
+  scoreStructure,
+  students = [],
+  computedScoresMap = {},
+  attendanceStatsMap = {},
+  characteristicsMap = {},
+}) {
+  const meta = resolveCourseExportMeta(course, settings, teacher, scoreStructure);
+  const sections = students.map((stu, idx) => {
+    const computed = computedScoresMap[stu.id] || {};
+    const att = attendanceStatsMap[stu.id] || { attendancePct: 100 };
+    const ch = characteristicsMap[stu.id] || {};
+    const effectiveAtt = computed.effectiveAttendancePct ?? att.attendancePct ?? 100;
+    return {
+      properties: { page: { size: { orientation: PageOrientation.PORTRAIT }, margin: { top: 720, bottom: 720, left: 820, right: 820 } } },
+      children: [
+        makeDocxParagraph('ใบแจ้งผลการเรียนประจำรายวิชา (สำหรับแจ้งผู้ปกครอง/นักเรียน)', {
+          bold: true,
+          size: 30,
+          align: AlignmentType.CENTER,
+          spaceAfter: 40,
+        }),
+        makeDocxParagraph(`${meta.schoolName} • ${meta.affiliationLabel}`, {
+          size: 24,
+          align: AlignmentType.CENTER,
+          spaceAfter: 140,
+        }),
+        makeDocxParagraph(
+          `ชื่อ-สกุล: ${getFullStudentName(stu)}   รหัส: ${stu.student_code || '-'}   เลขที่: ${stu.student_number || idx + 1}   ชั้น ${course.grade_level}/${course.classroom}`,
+          { bold: true, size: 24, spaceAfter: 80 }
+        ),
+        makeDocxParagraph(
+          `รายวิชา: ${course.subject_code} ${course.subject_name} • ปีการศึกษา ${course.academic_year} ภาคเรียนที่ ${course.semester} • ครูผู้สอน: ${meta.teacherName}`,
+          { size: 22, spaceAfter: 140 }
+        ),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              children: ['เวลาเรียน (%)', `เก็บ (${scoreStructure?.formative_ratio ?? 60})`, `กลางภาค (${scoreStructure?.midterm_ratio ?? 20})`, `ปลายภาค (${scoreStructure?.final_ratio ?? 20})`, 'รวม (100)', 'ผลการเรียน'].map((h) =>
+                makeDocxCell(h, { bold: true, shading: 'EEF2F9', size: 22 })
+              ),
+            }),
+            new TableRow({
+              children: [
+                makeDocxCell(`${effectiveAtt}%`, { size: 22 }),
+                makeDocxCell(computed.formativeTotal ?? 0, { size: 22 }),
+                makeDocxCell(computed.midtermTotal ?? 0, { size: 22 }),
+                makeDocxCell(computed.finalTotal ?? 0, { size: 22 }),
+                makeDocxCell(computed.totalScore ?? 0, { bold: true, size: 24 }),
+                makeDocxCell(computed.grade ?? '0', { bold: true, size: 26 }),
+              ],
+            }),
+          ],
+        }),
+        makeDocxParagraph('', { spaceAfter: 100 }),
+        makeDocxParagraph(
+          `คุณลักษณะอันพึงประสงค์: ${LEVEL_LABELS[ch.traits_level ?? 3]?.label || 'ดีเยี่ยม'}    |    การอ่าน คิดวิเคราะห์ และเขียน: ${LEVEL_LABELS[ch.rtw_level ?? 3]?.label || 'ดีเยี่ยม'}`,
+          { size: 22, spaceAfter: 80 }
+        ),
+        makeDocxParagraph(meta.roundingFootnote, { size: 20, spaceAfter: 200 }),
+        makeDocxParagraph(
+          `ลงชื่อ.................................... (${meta.teacherName})           ลงชื่อ.................................... (ผู้ปกครองรับทราบ)`,
+          { size: 22, align: AlignmentType.CENTER }
+        ),
+      ],
+    };
+  });
+
+  const doc = new Document({ sections: sections.length ? sections : [{ children: [makeDocxParagraph('ไม่มีรายชื่อนักเรียน')] }] });
+  const blob = await Packer.toBlob(doc);
+  const safeCode = `${course.subject_code}_${course.grade_level}-${course.classroom}`.replace(/[^\wก-๙.-]/g, '_');
+  downloadBlob(blob, `ใบแจ้งผลรายบุคคล_${safeCode}_GoogleDocs.docx`);
 }

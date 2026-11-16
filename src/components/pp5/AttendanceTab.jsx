@@ -24,6 +24,8 @@ const STATUS_BADGE_MAP = {
   absent: 'bg-rose-100 text-rose-800 border-rose-300',
 };
 
+import { WeeklyAttendanceModal } from './WeeklyAttendanceModal';
+
 export function AttendanceTab({
   course,
   students,
@@ -119,6 +121,7 @@ export function AttendanceTab({
     return map;
   }, [students, attendanceRecords, course.total_hours, minAttendancePct]);
 
+  const [weeklyModalOpen, setWeeklyModalOpen] = useState(false);
   const riskCount = Object.values(studentSummaries).filter((s) => s.isBelowThreshold).length;
 
   const handleMatrixCellChange = async (studentId, session, nextStatus) => {
@@ -161,6 +164,14 @@ export function AttendanceTab({
           >
             <Table2 className="w-4 h-4" />
             ตารางเช็คชื่อรายคาบ (Manual / แก้ไขย้อนหลัง)
+          </button>
+          <button
+            type="button"
+            onClick={() => setWeeklyModalOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-royal-700 hover:bg-royal-800 text-white shadow-sm transition-all"
+          >
+            <span>📅</span>
+            ตารางเช็คชื่อรายสัปดาห์ (ปากกาจิ้มเร็ว)
           </button>
         </div>
 
@@ -439,6 +450,14 @@ export function AttendanceTab({
           </div>
         </div>
       )}
+
+      <WeeklyAttendanceModal
+        open={weeklyModalOpen}
+        onClose={() => setWeeklyModalOpen(false)}
+        students={students}
+        attendanceRecords={attendanceRecords}
+        onSaveBatch={onSaveBatch}
+      />
     </div>
   );
 }

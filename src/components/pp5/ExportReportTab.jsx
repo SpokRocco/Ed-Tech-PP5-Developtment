@@ -113,6 +113,20 @@ export function ExportReportTab({
   }, [attendanceRecords]);
 
   const units = scoreStructure?.units || [];
+  const metaOverrides = course?.cover_settings?.courseMetaOverrides || {};
+  const schoolName = metaOverrides.school_name || settings?.school_name;
+  const affiliationLabel =
+    metaOverrides.affiliation ||
+    `${settings?.affiliation || ''} (${settings?.affiliation_short || ''})`.trim();
+  const teacherName = metaOverrides.teacher_name || teacher?.full_name || '-';
+  const directorName = metaOverrides.director_name || settings?.director_name || 'นายเอกชัย สุภา';
+  const roundingMode = scoreStructure?.grading_policy?.roundingMode || 'none';
+  const roundingLabel =
+    roundingMode === 'half_up'
+      ? 'ปัดตามหลักคณิตศาสตร์ ≥ 0.5 ปัดขึ้น (เช่น 79.5 → 80 = 4)'
+      : roundingMode === 'ceil'
+      ? 'ปัดเศษขึ้นทุกกรณี (เช่น 79.1 → 80 = 4)'
+      : 'ไม่ปัดเศษคะแนนรวม (เช่น 79.5 = 3.5)';
   const tableOrientation = resolveOrientation('landscape');
   const coverOrientation = resolveOrientation('portrait');
 
@@ -233,8 +247,8 @@ export function ExportReportTab({
             </div>
             <h2 className="text-2xl font-bold text-navy-900 pt-2">{layout.documentTitle}</h2>
             <p className="text-sm text-slate-700">{layout.subtitle}</p>
-            <p className="text-lg font-bold pt-2">{settings?.school_name}</p>
-            <p className="text-sm text-slate-600">{settings?.affiliation} ({settings?.affiliation_short})</p>
+            <p className="text-lg font-bold pt-2">{schoolName}</p>
+            <p className="text-sm text-slate-600">{affiliationLabel}</p>
           </div>
 
           <div className="border border-slate-400 rounded-lg p-4 text-sm grid grid-cols-2 gap-2 my-4">
@@ -245,7 +259,7 @@ export function ExportReportTab({
             <div><b>ระดับชั้น/ห้อง:</b> {course.grade_level}/{course.classroom}</div>
             <div><b>หน่วยกิต:</b> {course.credits}</div>
             <div><b>เวลาเรียน:</b> {course.total_hours} ชั่วโมง</div>
-            <div className="col-span-2"><b>ครูผู้สอน:</b> {teacher?.full_name || '-'}</div>
+            <div className="col-span-2"><b>ครูผู้สอน:</b> {teacherName}</div>
           </div>
 
           <div className="space-y-2">
@@ -272,7 +286,7 @@ export function ExportReportTab({
           <div className="grid grid-cols-3 gap-4 text-center text-xs pt-6">
             <div>
               <p>ลงชื่อ......................................</p>
-              <p className="mt-1">({teacher?.full_name || 'ครูผู้สอน'})</p>
+              <p className="mt-1">({teacherName})</p>
               <p>{layout.signatures.teacherLabel}</p>
             </div>
             <div>
@@ -282,14 +296,15 @@ export function ExportReportTab({
             </div>
             <div>
               <p>ลงชื่อ......................................</p>
-              <p className="mt-1 font-bold">({settings?.director_name || 'นายเอกชัย สุภา'})</p>
+              <p className="mt-1 font-bold">({directorName})</p>
               <p>{layout.signatures.directorLabel}</p>
             </div>
           </div>
 
-          <p className="text-[11px] text-center text-slate-500 border-t border-slate-200 pt-2">
-            {layout.footerCredit}
-          </p>
+          <div className="border-t border-slate-200 pt-2 space-y-0.5 text-[10px] text-slate-500">
+            <p className="text-left">วิธีปัดคะแนน: {roundingLabel}</p>
+            <p className="text-center">{layout.footerCredit}</p>
+          </div>
         </section>
 
         {/* Page 1B: Course Indicators Printed Automatically */}
@@ -343,9 +358,10 @@ export function ExportReportTab({
             )}
           </div>
 
-          <p className="text-[11px] text-center text-slate-500 border-t border-slate-200 pt-2">
-            {layout.footerCredit}
-          </p>
+          <div className="border-t border-slate-200 pt-2 space-y-0.5 text-[10px] text-slate-500">
+            <p className="text-left">วิธีปัดคะแนน: {roundingLabel}</p>
+            <p className="text-center">{layout.footerCredit}</p>
+          </div>
         </section>
 
         {/* Page 2: Scores & Attendance & Characteristics Table (Landscape default) */}
@@ -390,11 +406,12 @@ export function ExportReportTab({
                   const computed = computedScoresMap[stu.id] || {};
                   const att = attendanceStatsMap[stu.id] || { attendancePct: 100 };
                   const ch = characteristicsMap[stu.id] || {};
+                  const effectiveAtt = computed.effectiveAttendancePct ?? att.attendancePct ?? 100;
                   return (
                     <tr key={stu.id}>
                       <td className="border border-slate-700 py-1 px-1.5 text-center">{stu.student_number || idx + 1}</td>
                       <td className="border border-slate-700 py-1 px-2">{getFullStudentName(stu)}</td>
-                      <td className="border border-slate-700 py-1 px-1.5 text-center">{att.attendancePct}%</td>
+                      <td className="border border-slate-700 py-1 px-1.5 text-center">{effectiveAtt}%</td>
                       {units.map((u) => (
                         <td key={u.id} className="border border-slate-700 py-1 px-1.5 text-center">
                           {computed.unitScores?.[u.id] ?? 0}
@@ -448,9 +465,10 @@ export function ExportReportTab({
             )}
           </div>
 
-          <p className="text-[10px] text-center text-slate-500 border-t border-slate-200 pt-2">
-            {layout.footerCredit}
-          </p>
+          <div className="border-t border-slate-200 pt-2 space-y-0.5 text-[10px] text-slate-500">
+            <p className="text-left">วิธีปัดคะแนน: {roundingLabel}</p>
+            <p className="text-center">{layout.footerCredit}</p>
+          </div>
         </section>
       </div>
     </div>

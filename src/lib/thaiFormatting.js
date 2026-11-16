@@ -88,6 +88,16 @@ export function calculateStudentAttendance(records = [], totalCourseHours = 40, 
 }
 
 /**
+ * ปัดคะแนนรวมตามระเบียบวัดผลของสถานศึกษา ('none' | 'half_up' | 'ceil')
+ */
+export function applyScoreRounding(totalScore, roundingMode = 'none') {
+  const num = Number(totalScore) || 0;
+  if (roundingMode === 'half_up') return Math.round(num);
+  if (roundingMode === 'ceil') return Math.ceil(num);
+  return Number(num.toFixed(1));
+}
+
+/**
  * แปลงคะแนนรวม 0-100 เป็นเกรดมาตรฐาน 8 ระดับ + ร / มส
  */
 export function calculateGradeFromScore({
@@ -97,6 +107,7 @@ export function calculateGradeFromScore({
   hasFinalScore = true,
   requireFinalExam = true,
   manualSpecialStatus = null,
+  roundingMode = 'none',
 }) {
   if (manualSpecialStatus === 'มส' || attendancePct < minAttendancePct) {
     return 'มส';
@@ -105,7 +116,7 @@ export function calculateGradeFromScore({
     return 'ร';
   }
 
-  const score = Math.round(Number(totalScore) || 0);
+  const score = applyScoreRounding(totalScore, roundingMode);
   if (score >= 80) return '4';
   if (score >= 75) return '3.5';
   if (score >= 70) return '3';
@@ -118,8 +129,14 @@ export function calculateGradeFromScore({
 
 /**
  * คำนวณสรุปคะแนนเก็บ/กลางภาค/ปลายภาคตามโครงสร้างสัดส่วน
+ * รองรับทั้งการกรอกคะแนนรายหน่วย และกรอกรวมช่อง เก็บ/กลางภาค/ปลายภาค หรือดึงจากหัวข้อ 1.1
  */
-export function computeStudentCourseScores(studentScoreRow, scoreStructure, attendanceSummary) {
+export function computeStudentCourseScores(
+  studentScoreRow,
+  scoreStructure,
+  attendanceSummary,
+  courseTotalHours = 40
+) {
   const units = scoreStructure?.units || [];
   const unitScores = studentScoreRow?.unit_scores || {};
 
@@ -129,7 +146,7 @@ export function computeStudentCourseScores(studentScoreRow, scoreStructure, atte
   let midtermMax = 0;
   let finalRaw = 0;
   let finalMax = 0;
-  let hasFinalEntry = false;
+  let hasFinalUnitEntry = false;
 
   for (const unit of units) {
     const val = unitScores[unit.id];
@@ -143,7 +160,7 @@ export function computeStudentCourseScores(studentScoreRow, scoreStructure, atte
       finalRaw += numericVal;
       finalMax += maxVal;
       if (val !== '' && val !== null && val !== undefined) {
-        hasFinalEntry = true;
+        hasFinalUnitEntry = true;
       }
     } else {
       formativeRaw += numericVal;
@@ -154,30 +171,73 @@ export function computeStudentCourseScores(studentScoreRow, scoreStructure, atte
   const fRatio = Number(scoreStructure?.formative_ratio ?? 60);
   const mRatio = Number(scoreStructure?.midterm_ratio ?? 20);
   const fnRatio = Number(scoreStructure?.final_ratio ?? 20);
+  const hasDirectFormative =
+    unitScores.__directFormative !== undefined &&
+    unitScores.__directFormative !== '' &&
+    unitScores.__directFormative !== null;
+  const hasDirectMidterm =
+    unitScores.__directMidterm !== undefined &&
+    unitScores.__directMidterm !== '' &&
+    unitScores.__directMidterm !== null;
+  const hasDirectFinal =
+    unitScores.__directFinal !== undefined &&
+    unitScores.__directFinal !== '' &&
+    unitScores.__directFinal !== null;
 
-  const formativeWeighted = formativeMax > 0 ? (formativeRaw / formativeMax) * fRatio : 0;
-  const midtermWeighted = midtermMax > 0 ? (midtermRaw / midtermMax) * mRatio : 0;
-  const finalWeighted = finalMax > 0 ? (finalRaw / finalMax) * fnRatio : 0;
+  const formativeWeighted = hasDirectFormative
+    ? Number(unitScores.__directFormative) || 0
+    : formativeMax > 0
+    ? (formativeRaw / formativeMax) * fRatio
+    : 0;
+  const midtermWeighted = hasDirectMidterm
+    ? Number(unitScores.__directMidterm) || 0
+    : midtermMax > 0
+    ? (midtermRaw / midtermMax) * mRatio
+    : 0;
+  const finalWeighted = hasDirectFinal
+    ? Number(unitScores.__directFinal) || 0
+    : finalMax > 0
+    ? (finalRaw / finalMax) * fnRatio
+    : 0;
 
-  const totalScore = Number((formativeWeighted + midtermWeighted + finalWeighted).toFixed(1));
+  const hasFinalEntry = hasDirectFinal || hasFinalUnitEntry;
+  const roundingMode = scoreStructure?.grading_policy?.roundingMode || 'none';
+  const rawTotalScore = Number((formativeWeighted + midtermWeighted + finalWeighted).toFixed(1));
+  const totalScore = applyScoreRounding(rawTotalScore, roundingMode);
   const minAttendancePct = Number(scoreStructure?.grading_policy?.minAttendancePct ?? 80);
   const requireFinalExam = Boolean(scoreStructure?.grading_policy?.requireFinalExam ?? false);
 
+  const hasManualHours =
+    unitScores.__manualAttendanceHours !== undefined &&
+    unitScores.__manualAttendanceHours !== '' &&
+    unitScores.__manualAttendanceHours !== null;
+  const manualHours = hasManualHours ? Number(unitScores.__manualAttendanceHours) || 0 : null;
+  const planHours = Number(courseTotalHours) || attendanceSummary?.totalRecorded || 40;
+  const effectiveAttendancePct = hasManualHours
+    ? planHours > 0
+      ? Number(Math.min(100, (manualHours / planHours) * 100).toFixed(1))
+      : 100
+    : attendanceSummary?.attendancePct ?? 100;
+
   const grade = calculateGradeFromScore({
-    totalScore,
-    attendancePct: attendanceSummary?.attendancePct ?? 100,
+    totalScore: rawTotalScore,
+    attendancePct: effectiveAttendancePct,
     minAttendancePct,
-    hasFinalScore: finalMax === 0 || hasFinalEntry,
+    hasFinalScore: (fnRatio === 0 && finalMax === 0) || hasFinalEntry,
     requireFinalExam,
     manualSpecialStatus: studentScoreRow?.special_status || null,
+    roundingMode,
   });
 
   return {
     formativeTotal: Number(formativeWeighted.toFixed(1)),
     midtermTotal: Number(midtermWeighted.toFixed(1)),
     finalTotal: Number(finalWeighted.toFixed(1)),
+    rawTotalScore,
     totalScore,
     grade,
+    effectiveAttendancePct,
+    manualAttendanceHours: manualHours,
   };
 }
 
@@ -300,16 +360,21 @@ export function computeCourseCompletion(
     };
   }
 
-  const enrolledIds = course.student_ids?.length
-    ? course.student_ids
-    : students
-        .filter(
-          (s) =>
-            s.status === 'active' &&
-            s.grade_level === course.grade_level &&
-            String(s.classroom || '1') === String(course.classroom || '1')
-        )
-        .map((s) => s.id);
+  const customIds = (course.cover_settings?.customStudents || []).map((s) => s.id);
+  const rawEnrolledIds = course.student_ids?.length
+    ? [...course.student_ids, ...customIds]
+    : [
+        ...students
+          .filter(
+            (s) =>
+              s.status === 'active' &&
+              s.grade_level === course.grade_level &&
+              String(s.classroom || '1') === String(course.classroom || '1')
+          )
+          .map((s) => s.id),
+        ...customIds,
+      ];
+  const enrolledIds = Array.from(new Set(rawEnrolledIds));
   const enrolledSet = new Set(enrolledIds);
   const enrolledCount = enrolledIds.length;
 
@@ -323,6 +388,12 @@ export function computeCourseCompletion(
       .map((sc) => sc.student_id)
   );
   const attSet = new Set(courseAtt.map((a) => a.student_id));
+  courseScores.forEach((sc) => {
+    const manualH = sc.unit_scores?.__manualAttendanceHours;
+    if (manualH !== undefined && manualH !== null && manualH !== '') {
+      attSet.add(sc.student_id);
+    }
+  });
   const traitsSet = new Set(
     courseTraits
       .filter((ch) => ch.traits_level !== undefined && ch.rtw_level !== undefined)
@@ -826,4 +897,225 @@ export function buildClassroomTermOverview({
     consolidatedSubjects,
     annualStudentCards,
   };
+}
+
+/**
+ * แปลงคำนำหน้าย่อภาษาไทยให้เป็นคำเต็มมาตรฐาน (ด.ช./ด.ญ./น.ส.)
+ */
+export function expandThaiStudentPrefix(rawLine = '') {
+  return String(rawLine || '')
+    .trim()
+    .replace(/^(?:ด\.\s*ช\.|ดช\.)\s*/i, 'เด็กชาย')
+    .replace(/^(?:ด\.\s*ญ\.|ดญ\.)\s*/i, 'เด็กหญิง')
+    .replace(/^(?:น\.\s*ส\.|นส\.)\s*/i, 'นางสาว');
+}
+
+/**
+ * แยก Prefix / First Name / Last Name จากชื่อเต็ม
+ */
+export function splitThaiFullName(fullName = '') {
+  const expanded = expandThaiStudentPrefix(fullName).replace(/\s+/g, ' ').trim();
+  const knownPrefixes = ['เด็กชาย', 'เด็กหญิง', 'นางสาว', 'นาย', 'นาง'];
+  let prefix = '';
+  let remainder = expanded;
+  for (const p of knownPrefixes) {
+    if (expanded.startsWith(p)) {
+      prefix = p;
+      remainder = expanded.slice(p.length).trim();
+      break;
+    }
+  }
+  const parts = remainder.split(' ').filter(Boolean);
+  const first_name = parts[0] || expanded;
+  const last_name = parts.slice(1).join(' ');
+  const gender =
+    prefix === 'เด็กชาย' || prefix === 'นาย'
+      ? 'ชาย'
+      : prefix === 'เด็กหญิง' || prefix === 'นางสาว' || prefix === 'นาง'
+      ? 'หญิง'
+      : '';
+  return { prefix, first_name, last_name, gender };
+}
+
+/**
+ * แปลงข้อความวางรายชื่อทั้งห้อง (บรรทัดละ 1 คน: "ชื่อ" หรือ "เลขประจำตัว ชื่อ")
+ */
+export function parseBulkStudentLines(rawText = '', startNumber = 1) {
+  const lines = String(rawText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  return lines.map((line, i) => {
+    const matchWithCode = line.match(/^(\d{3,10})[\s\t,]+(.+)$/);
+    const student_code = matchWithCode ? matchWithCode[1].trim() : '';
+    const namePart = matchWithCode ? matchWithCode[2].trim() : line;
+    const { prefix, first_name, last_name, gender } = splitThaiFullName(namePart);
+    return {
+      student_number: startNumber + i,
+      student_code,
+      prefix,
+      first_name,
+      last_name,
+      gender,
+    };
+  });
+}
+
+/**
+ * รวมรายชื่อนักเรียนในรายวิชา (ทั้งฐานข้อมูลกลาง + นักเรียนเฉพาะเล่ม + override เลขที่/ชื่อ)
+ */
+export function resolveCourseStudents(course, centralStudents = []) {
+  if (!course) return [];
+  const customList = course.cover_settings?.customStudents || [];
+  const overrides = course.cover_settings?.rosterOverrides || {};
+  const byId = new Map();
+  centralStudents.forEach((s) => byId.set(s.id, s));
+  customList.forEach((s) => byId.set(s.id, s));
+
+  const enrolledIds = Array.isArray(course.student_ids) && course.student_ids.length
+    ? course.student_ids
+    : centralStudents
+        .filter(
+          (s) =>
+            s.status === 'active' &&
+            s.grade_level === course.grade_level &&
+            String(s.classroom || '1') === String(course.classroom || '1')
+        )
+        .map((s) => s.id);
+
+  const mergedIds = Array.from(new Set([...enrolledIds, ...customList.map((c) => c.id)]));
+  return mergedIds
+    .map((id, idx) => {
+      const base = byId.get(id);
+      if (!base) return null;
+      const ov = overrides[id] || {};
+      return {
+        ...base,
+        ...ov,
+        student_number: Number(ov.student_number ?? base.student_number ?? idx + 1),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.student_number || 0) - (b.student_number || 0));
+}
+
+/**
+ * สร้างรายงานสรุปคะแนนรายชั้น (เรียงอันดับจากคะแนนสูงสุด -> ต่ำสุด)
+ */
+export function buildRankedCourseReport({
+  course,
+  students = [],
+  computedScoresMap = {},
+  attendanceStatsMap = {},
+  characteristicsMap = {},
+}) {
+  const rows = students.map((stu, idx) => {
+    const computed = computedScoresMap[stu.id] || {};
+    const att = attendanceStatsMap[stu.id] || { attendancePct: 100 };
+    const ch = characteristicsMap[stu.id] || {};
+    const effectivePct = computed.effectiveAttendancePct ?? att.attendancePct ?? 100;
+    return {
+      student: stu,
+      no: stu.student_number || idx + 1,
+      student_code: stu.student_code || '',
+      fullName: getFullStudentName(stu),
+      attendancePct: effectivePct,
+      formativeTotal: computed.formativeTotal ?? 0,
+      midtermTotal: computed.midtermTotal ?? 0,
+      finalTotal: computed.finalTotal ?? 0,
+      totalScore: computed.totalScore ?? 0,
+      grade: computed.grade ?? '0',
+      traitsLevel: ch.traits_level ?? 3,
+      rtwLevel: ch.rtw_level ?? 3,
+    };
+  });
+
+  const sorted = [...rows].sort((a, b) => (b.totalScore || 0) - (a.totalScore || 0) || a.no - b.no);
+  let lastScore = null;
+  let lastRank = 0;
+  const rankedRows = sorted.map((r, idx) => {
+    const rank = lastScore === r.totalScore ? lastRank : idx + 1;
+    lastScore = r.totalScore;
+    lastRank = rank;
+    return { ...r, rank };
+  });
+
+  const scores = rows.map((r) => Number(r.totalScore) || 0);
+  const count = scores.length;
+  const mean = count > 0 ? Number((scores.reduce((s, n) => s + n, 0) / count).toFixed(2)) : 0;
+  const max = count > 0 ? Math.max(...scores) : 0;
+  const min = count > 0 ? Math.min(...scores) : 0;
+  const sd =
+    count > 1
+      ? Number(
+          Math.sqrt(scores.reduce((s, n) => s + (n - mean) ** 2, 0) / count).toFixed(2)
+        )
+      : 0;
+  const passedCount = rows.filter((r) => !['0', 'ร', 'มส'].includes(r.grade)).length;
+  const goodAndAboveCount = rows.filter((r) => ['4', '3.5', '3'].includes(r.grade)).length;
+
+  return {
+    course,
+    rankedRows,
+    stats: {
+      count,
+      mean,
+      max,
+      min,
+      sd,
+      passedCount,
+      passPct: count > 0 ? Number(((passedCount / count) * 100).toFixed(1)) : 0,
+      goodAndAboveCount,
+      goodAndAbovePct: count > 0 ? Number(((goodAndAboveCount / count) * 100).toFixed(1)) : 0,
+    },
+  };
+}
+
+/**
+ * รวมผล ปพ.5 ภาคเรียนที่ 1 + ภาคเรียนที่ 2 เป็นผลระดับรายปี (สำหรับ ป.1-ป.6)
+ */
+export function mergeSemesterCourseData({
+  students = [],
+  sem1Scores = [],
+  sem2Scores = [],
+  roundingMode = 'none',
+  minAttendancePct = 80,
+}) {
+  const s1Map = new Map(sem1Scores.map((r) => [r.student_id, r]));
+  const s2Map = new Map(sem2Scores.map((r) => [r.student_id, r]));
+
+  return students.map((stu) => {
+    const r1 = s1Map.get(stu.id);
+    const r2 = s2Map.get(stu.id);
+    const t1 = r1?.total_score !== undefined && r1?.total_score !== null ? Number(r1.total_score) : null;
+    const t2 = r2?.total_score !== undefined && r2?.total_score !== null ? Number(r2.total_score) : null;
+    const combinedAvg =
+      t1 !== null && t2 !== null
+        ? Number(((t1 + t2) / 2).toFixed(1))
+        : t1 !== null
+        ? t1
+        : t2 ?? 0;
+
+    const finalTotal = applyScoreRounding(combinedAvg, roundingMode);
+    const special = r2?.special_status || r1?.special_status || null;
+    const grade = calculateGradeFromScore({
+      totalScore: combinedAvg,
+      attendancePct: 100,
+      minAttendancePct,
+      hasFinalScore: true,
+      requireFinalExam: false,
+      manualSpecialStatus: special,
+      roundingMode,
+    });
+
+    return {
+      student_id: stu.id,
+      sem1Score: t1,
+      sem2Score: t2,
+      annualScore: finalTotal,
+      annualGrade: grade,
+      special_status: special,
+    };
+  });
 }
